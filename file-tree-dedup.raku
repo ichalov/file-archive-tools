@@ -3,8 +3,7 @@
   Author: <ichalov@gmail.com>, 2020-08-12
 
   TODO:
-    Implement --verbose mode
-    Handle symlinks
+    Think whether symlinks need handling
     Protect against <dir> = <dir0> or one directory inside another
     Use Digest::MD5 to improve speed on small files
 
@@ -17,6 +16,7 @@ my $script-description = Q:c:to/EOT/;
   in exactly same subdir of <dir0>. Option --any-place relaxes the requirement
   of the same position and deletes file from <dir> if the file with same md5sum
   is found anywhere under <dir0>.
+  It only prints what it does if --verbose option is specified.
   EOT
 
 sub USAGE() {
@@ -27,12 +27,15 @@ sub USAGE() {
 # Global storage for <dir0>
 my $d0;
 
+# Global storage for --verbose option presence
+my Bool $_verbose;
+
 # Global hash for md5sums of files in <dir0> in case of --any-place.
 # TODO: Better re-make using state variable, but difficult.
 my %dir0-md5sums = Empty;
 
 
-sub MAIN( Str $dir0, Str $dir, Bool :$any-place ) {
+sub MAIN( Str $dir0, Str $dir, Bool :$any-place, Bool :$verbose ) {
   $d0 = append-slash-to-dir( $dir0 );
   unless ( $d0.IO.d ) {
     die "Can't find directory {$d0}";
@@ -42,6 +45,8 @@ sub MAIN( Str $dir0, Str $dir, Bool :$any-place ) {
   unless ( $d.IO.d ) {
     die "Can't find directory {$d}";
   }
+
+  $_verbose = $verbose;
 
   process-sub-dir( $d, '',
 
@@ -58,7 +63,7 @@ sub MAIN( Str $dir0, Str $dir, Bool :$any-place ) {
 
         my $md5 = file_md5_hex( $b );
         if ( %dir0-md5sums{ $md5 }:exists ) {
-          say "{$b} -> remove ( {%dir0-md5sums{ $md5 }} )";
+          say "{$b} -> remove ( {%dir0-md5sums{ $md5 }} )" if $_verbose;
           unlink( $b );
         }
       }
@@ -71,7 +76,7 @@ sub MAIN( Str $dir0, Str $dir, Bool :$any-place ) {
           my $md5 = file_md5_hex( $b ) || '--';
           my $md5_0 = file_md5_hex( $a ) || '---';
           if ( $md5_0 eq $md5 ) {
-            say "{$b} -> remove";
+            say "{$b} -> remove" if $_verbose;
             unlink( $b );
           }
         }
@@ -105,7 +110,7 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
   if ( $dir !~~ m:i/ ^ $d0 / ) {
     my @deleted-dirs = rmdir( $dir );
     if ( $dir eq any( @deleted-dirs ) ) {
-      say "{$dir} -> rmdir";
+      say "{$dir} -> rmdir" if $_verbose;
     }
   }
 }
