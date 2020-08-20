@@ -4,7 +4,6 @@
     various sizes.
 
   TODO:
-    Include calculation time in the report
     Shortcut within the limit span before max
     Progress bar during calculation
     Feed from `ls -l` instead of live directory
@@ -49,6 +48,8 @@ sub MAIN ( Str $src-dir, Bool :$speedups ) {
 
   $_speedups = $speedups;
 
+  my $start-time = DateTime.now();
+
   for $src-dir.IO.dir -> $file {
     state $counter;
     next unless $file.IO.f;
@@ -67,6 +68,8 @@ sub MAIN ( Str $src-dir, Bool :$speedups ) {
   check-combination( Empty, @init-tail, 0 );
 
   report-best-combinations();
+
+  say ( DateTime.now() - $start-time ).round(0.1) ~ ' seconds elapsed';
 }
 
 # NB: This recursive function relies on global %candidates and
