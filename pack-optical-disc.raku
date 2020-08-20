@@ -74,7 +74,11 @@ sub MAIN ( Str $src-dir, Bool :$speedups ) {
 sub check-combination( @base, @tail, $base-size ) {
   TAIL: for @tail -> $base-add {
     my $new-size = $base-size + %candidates{$base-add};
-    for %container-size-limits.kv -> $disc, $limit {
+    for %container-size-limits.keys
+          .sort({%container-size-limits{$^a}})
+        -> $disc
+    {
+      my $limit = %container-size-limits{$disc};
       if ( $base-size <= $limit && $new-size > $limit ) {
 #        say $disc ~ '|' ~ @base.join: '|'; # DIAG
 
