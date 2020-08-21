@@ -20,6 +20,7 @@ my %container-size-limits = (
   'bd-r-25' => 25000000000,
 );
 my $max-container-size = max( %container-size-limits.values );
+my $limit-before-max = %container-size-limits.values.sort[*-2];
 
 my $script-description = Q:c:to/EOT/;
 
@@ -40,6 +41,13 @@ sub USAGE() {
 my %candidates = Empty;
 my %file-names = Empty;
 my %file-sets = Empty;
+
+# Global storages for a speedup feature that shortcuts file combinations that
+# are a different ordering of already checked but with fixed lead of the size
+# no less than the second biggest container.
+my $cur-limit;
+my $base-at-limit;
+my %visited-combinations;
 
 my $_speedups = False;
 
@@ -84,6 +92,15 @@ sub check-combination( @base, @tail, $base-size ) {
       if ( $base-size <= $limit && $new-size > $limit ) {
 #        say $disc ~ '|' ~ @base.join: '|'; # DIAG
 
+        # Save the combination of files that covers (exceeds) the disc
+        # of the biggest size not yet filled. To be used in the speedup
+        # shortcutting file combinations that are a different ordering of
+        # already checked.
+        if ( $limit < $max-container-size ) {
+           $cur-limit = $limit;
+           $base-at-limit = ( @base, $base-add ).flat.join('|');
+        }
+
         %file-sets{$disc ~ '|' ~ @base.sort.join: '|'} = $base-size;
 
         # Don't check any further combinations if the current $limit is achieved
@@ -99,6 +116,28 @@ sub check-combination( @base, @tail, $base-size ) {
     # bigger than the largest container size
     if ( $new-size > $max-container-size ) {
       next;
+    }
+
+    # Make the script run faster by skipping combinations of files that are
+    # a different ordering of already checked. The comparison only applies to
+    # "tail" - the files that go to the space of the largest disc that is
+    # addition over the second biggest disc.
+    # It produces partial result (different to the one without shortcuts).
+    if ( $_speedups && $cur-limit == $limit-before-max ) {
+      my $next-base = ( @base, $base-add ).flat.join: '|';
+#      put 'next-base: ' ~ $next-base; # DIAG
+      if ( my $m = $next-base ~~ m/ ^ $base-at-limit \| (.+) / ) {
+        my $tail = $m[0];
+        my $sorted-tail = $tail.split('|').sort.join('|');
+#        put 'sorted-tail: ' ~ $sorted-tail; # DIAG
+        if ( %visited-combinations{ $base-at-limit }{ $sorted-tail }:exists ) {
+#          say "skipping " ~ $base-at-limit ~ '|' ~ $sorted-tail; # DIAG
+          next;
+        }
+        else {
+          %visited-combinations{ $base-at-limit }{ $sorted-tail } = 1;
+        }
+      }
     }
 
     my @next-tail = @tail.grep: { $_ != $base-add };
