@@ -4,7 +4,6 @@
     various sizes.
 
   TODO:
-    Shortcut within the limit span before max
     Progress bar during calculation
     Feed from `ls -l` instead of live directory
     Get rid of global variables
