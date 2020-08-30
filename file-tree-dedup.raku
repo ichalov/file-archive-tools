@@ -3,7 +3,6 @@
   Author: <ichalov@gmail.com>, 2020-08-12
 
   TODO:
-    Think whether symlinks need handling
     Use Digest::MD5 to improve speed on small files
 
 )
@@ -12,10 +11,14 @@ my $script-description = Q:c:to/EOT/;
 
   This script removes files under <dir> that also exist under <dir0>.
   It handles <dir> recursively and deletes files only if their copies are placed
-  in exactly same subdir of <dir0>. Option --any-place relaxes the requirement
-  of the same position and deletes file from <dir> if the file with same md5sum
-  is found anywhere under <dir0>.
-  It only prints what it does if --verbose option is specified.
+  in exactly same subdir of <dir0>.
+  Options:
+    --any-place - Relaxes the requirement of the same position and deletes file
+      from <dir> if the file with same md5sum is found anywhere under <dir0>.
+    --remove-symlinks - The script doesn't remove symlinks unless this option
+      specified. It won't remove symlinks referencing files under <dir0> even if
+      the option is present.
+    --verbose - Print logs of all actions on STDOUT.
   EOT
 
 sub USAGE() {
@@ -27,15 +30,19 @@ sub USAGE() {
 my $d0;
 my $d0-full;
 
-# Global storage for --verbose option presence
+# Global storages option presence
 my Bool $_verbose;
+my Bool $_remove-symlinks;
 
 # Global hash for md5sums of files in <dir0> in case of --any-place.
 # TODO: Better re-make using state variable, but difficult.
 my %dir0-md5sums = Empty;
 
 
-sub MAIN( Str $dir0, Str $dir, Bool :$any-place, Bool :$verbose ) {
+sub MAIN(
+  Str $dir0, Str $dir,
+  Bool :$any-place, Bool :$verbose, Bool :$remove-symlinks
+) {
   $d0 = append-slash-to-dir( $dir0 );
   unless ( $d0.IO.d ) {
     die "Can't find directory {$d0}";
@@ -48,6 +55,7 @@ sub MAIN( Str $dir0, Str $dir, Bool :$any-place, Bool :$verbose ) {
   }
 
   $_verbose = $verbose;
+  $_remove-symlinks = $remove-symlinks;
 
   process-sub-dir( $d, '',
 
@@ -112,6 +120,7 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
   # Only do that if $dir doesn't contain $d0 to prevent deleting empty
   # directories from <dir0> in --any-place $proc initialization run.
   if ( $dir !~~ m:i/ ^ $d0 / ) {
+    # TODO: Remove if it's symlink pointing to empty dir
     my @deleted-dirs = rmdir( $dir );
     if ( $dir eq any( @deleted-dirs ) ) {
       say "{$dir} -> rmdir" if $_verbose;
@@ -122,18 +131,23 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
 # Perform additional checks before calling unlink() on any files. This is
 # supposed to prevent deleting the files under <dir0> if they are symlinked
 # to target directory or --any-place option is used with two overlapping
-# directories.
+# directories. Also don't remove any symlinks if no --remove-symlinks option
+# is specified.
 sub unlink-file ( Str $fnf ) {
   if ( $fnf.IO.resolve(:completely).Str ~~ m:i/ $d0-full / ) {
     say "not processing {$fnf} because it's under source dir {$d0}"
       if ( $_verbose );
     return False;
   }
+  if ( ! $_remove-symlinks && $fnf.IO.l ) {
+    say "skip deleting symlink: {$fnf}" if ( $_verbose );
+    return False;
+  }
   unlink( $fnf );
   return True;
 }
 
-sub append-slash-to-dir( Str $dir ) returns Str {
+sub append-slash-to-dir ( Str $dir ) returns Str {
   my $d = $dir;
   if ( $d !~~ m/ \/ \s* $ / ) {
     $d ~= '/';
