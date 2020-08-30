@@ -4,7 +4,6 @@
 
   TODO:
     Think whether symlinks need handling
-    Protect against <dir> = <dir0> or one directory inside another
     Use Digest::MD5 to improve speed on small files
 
 )
@@ -26,6 +25,7 @@ sub USAGE() {
 
 # Global storage for <dir0>
 my $d0;
+my $d0-full;
 
 # Global storage for --verbose option presence
 my Bool $_verbose;
@@ -40,6 +40,7 @@ sub MAIN( Str $dir0, Str $dir, Bool :$any-place, Bool :$verbose ) {
   unless ( $d0.IO.d ) {
     die "Can't find directory {$d0}";
   }
+  $d0-full = $d0.IO.resolve(:completely).Str;
 
   my $d = append-slash-to-dir( $dir );
   unless ( $d.IO.d ) {
@@ -63,8 +64,9 @@ sub MAIN( Str $dir0, Str $dir, Bool :$any-place, Bool :$verbose ) {
 
         my $md5 = file_md5_hex( $b );
         if ( %dir0-md5sums{ $md5 }:exists ) {
-          say "{$b} -> remove ( {%dir0-md5sums{ $md5 }} )" if $_verbose;
-          unlink( $b );
+          if ( unlink-file( $b ) ) {
+            say "{$b} -> remove ( {%dir0-md5sums{ $md5 }} )" if $_verbose;
+          }
         }
       }
     !!
@@ -76,8 +78,9 @@ sub MAIN( Str $dir0, Str $dir, Bool :$any-place, Bool :$verbose ) {
           my $md5 = file_md5_hex( $b ) || '--';
           my $md5_0 = file_md5_hex( $a ) || '---';
           if ( $md5_0 eq $md5 ) {
-            say "{$b} -> remove" if $_verbose;
-            unlink( $b );
+            if ( unlink-file( $b ) ) {
+              say "{$b} -> remove" if $_verbose;
+            }
           }
         }
       }
@@ -87,7 +90,7 @@ sub MAIN( Str $dir0, Str $dir, Bool :$any-place, Bool :$verbose ) {
 
 # NB: This function is recursive and iterates through <dir>
 # $proc is how each leaf file should be processed (takes two full file names:
-# first from <dir0> and second from <dir>.
+# first from <dir0> and second from <dir> ).
 sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
   my $dir = $root-dir ~ $sub-dir;
   for $dir.IO.dir -> $fn0 {
@@ -96,6 +99,7 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
     my $fnf = $root-dir ~ $fns;
     my $fnf0 = $d0 ~ $fns; # NB: Use of a global !!!
     if ( $fnf.IO.d ) {
+      # TODO: Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
       process-sub-dir( $root-dir, $fns, $proc );
     }
     elsif ( $fnf.IO.f ) {
@@ -113,6 +117,20 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
       say "{$dir} -> rmdir" if $_verbose;
     }
   }
+}
+
+# Perform additional checks before calling unlink() on any files. This is
+# supposed to prevent deleting the files under <dir0> if they are symlinked
+# to target directory or --any-place option is used with two overlapping
+# directories.
+sub unlink-file ( Str $fnf ) {
+  if ( $fnf.IO.resolve(:completely).Str ~~ m:i/ $d0-full / ) {
+    say "not processing {$fnf} because it's under source dir {$d0}"
+      if ( $_verbose );
+    return False;
+  }
+  unlink( $fnf );
+  return True;
 }
 
 sub append-slash-to-dir( Str $dir ) returns Str {
