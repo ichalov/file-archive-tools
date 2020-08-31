@@ -47,7 +47,7 @@ sub MAIN(
   unless ( $d0.IO.d ) {
     die "Can't find directory {$d0}";
   }
-  $d0-full = $d0.IO.resolve(:completely).Str;
+  $d0-full = append-slash-to-dir( $d0.IO.resolve(:completely).Str );
 
   my $d = append-slash-to-dir( $dir );
   unless ( $d.IO.d ) {
@@ -96,7 +96,8 @@ sub MAIN(
   );
 }
 
-# NB: This function is recursive and iterates through <dir>
+# NB: This function is recursive and iterates through <dir> (or <dir0> in case
+# of initial collection of md5sums for --any-place option).
 # $proc is how each leaf file should be processed (takes two full file names:
 # first from <dir0> and second from <dir> ).
 sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
