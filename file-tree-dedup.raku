@@ -3,6 +3,7 @@
   Author: <ichalov@gmail.com>, 2020-08-12
 
   TODO:
+    Add option to replace the duplicate files with symlinks to <dir0>
     Use Digest::MD5 to improve speed on small files
 
 )
