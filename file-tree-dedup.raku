@@ -110,8 +110,19 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
     my $fns = $sub-dir ?? $sub-dir ~ '/' ~ $fn !! $fn;
     my $fnf = $root-dir ~ $fns;
     my $fnf0 = $d0 ~ $fns; # NB: Use of a global !!!
-    if ( $fnf.IO.d ) {
-      # TODO: Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
+    if ( $fns.IO.d && $sub-dir && ! is-dir-under-dir0( $sub-dir ) ) {
+      # Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
+      if ( is-dir-under-dir0( $fns ) ) {
+        say "skip processing dir {$fns} because it's under source dir {$d0}"
+          if ( $_verbose );
+        next;
+      }
+      # Skip going into symlinked dirs unless --remove-symlinks option
+      if ( $fns.IO.l && ! $_remove-symlinks ) {
+        say "skip processing dir {$fns} because it's symlink"
+          if ( $_verbose );
+        next;
+      }
       process-sub-dir( $root-dir, $fns, $proc );
     }
     elsif ( $fnf.IO.f ) {
@@ -124,7 +135,17 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
   # Only do that if $dir doesn't contain $d0 to prevent deleting empty
   # directories from <dir0> in --any-place $proc initialization run.
   if ( $dir !~~ m:i/ ^ $d0 / ) {
-    # TODO: Remove if it's symlink pointing to empty dir
+    if ( $dir.IO.l ) {
+      # Remove symlinks to empty directories if they don't contain files and
+      # --remove-symlinks is specified.
+      if ( $_remove-symlinks && ! $dir.IO.dir.elems ) {
+        my $linked-dir = $dir.IO.resolve(:completely).Str;
+        unlink( $dir );
+        say "{$dir} -> remove symlink to empty dir" if $_verbose;
+        # Also delete the linked dir
+        $dir = $linked-dir;
+      }
+    }
     my @deleted-dirs = rmdir( $dir );
     if ( $dir eq any( @deleted-dirs ) ) {
       say "{$dir} -> rmdir" if $_verbose;
@@ -138,7 +159,7 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
 # directories. Also don't remove any symlinks if no --remove-symlinks option
 # is specified.
 sub unlink-file ( Str $fnf ) {
-  if ( $fnf.IO.resolve(:completely).Str ~~ m:i/ $d0-full / ) {
+  if ( is-dir-under-dir0( $fnf ) ) {
     say "not processing {$fnf} because it's under source dir {$d0}"
       if ( $_verbose );
     return False;
@@ -149,6 +170,13 @@ sub unlink-file ( Str $fnf ) {
   }
   unlink( $fnf );
   return True;
+}
+
+sub is-dir-under-dir0 ( Str $dir ) {
+  if ( $dir.IO.resolve(:completely).Str ~~ m:i/ $d0-full / ) {
+    return True;
+  }
+  return False;
 }
 
 sub append-slash-to-dir ( Str $dir ) returns Str {
