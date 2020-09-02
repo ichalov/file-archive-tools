@@ -4,6 +4,8 @@
 
   TODO:
     Add option to replace the duplicate files with symlinks to <dir0>
+    Unpack tarballs in <dir0> for detailed comparison
+    Add a mode to remove files that also within a tarball in the same directory
     Use Digest::MD5 to improve speed on small files
 
 )
