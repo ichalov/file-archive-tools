@@ -6,6 +6,8 @@
     Add option to replace the duplicate files with symlinks to <dir0>
     Unpack tarballs in <dir0> for detailed comparison
     Add a mode to remove files that also within a tarball in the same directory
+    Split into --remove-file-symlinks and --remove-dir-symlinks
+    Add protection against looped symlink dirs if needed
     Use Digest::MD5 to improve speed on small files
 
 )
@@ -110,21 +112,28 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
     my $fns = $sub-dir ?? $sub-dir ~ '/' ~ $fn !! $fn;
     my $fnf = $root-dir ~ $fns;
     my $fnf0 = $d0 ~ $fns; # NB: Use of a global !!!
-    if ( $fns.IO.d && $sub-dir && ! is-dir-under-dir0( $sub-dir ) ) {
-      # Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
-      if ( is-dir-under-dir0( $fns ) ) {
-        say "skip processing dir {$fns} because it's under source dir {$d0}"
-          if ( $_verbose );
-        next;
-      }
-      # Skip going into symlinked dirs unless --remove-symlinks option
-      if ( $fns.IO.l && ! $_remove-symlinks ) {
-        say "skip processing dir {$fns} because it's symlink"
-          if ( $_verbose );
-        next;
+
+    if ( $fnf.IO.d ) {
+      # Only perform dir symlink checks and skips if it's not an invocation to
+      # collect md5sums from <dir0> for --any-place option
+      # TODO: replace '$root-dir ne $d0' with something more reliable 
+      if ( $root-dir ne $d0 ) {
+        # Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
+        if ( is-dir-under-dir0( $fnf ) ) {
+          say "not processing dir {$fnf} because it's under source dir {$d0}"
+            if ( $_verbose );
+          next;
+        }
+        # Skip going into symlinked dirs unless --remove-symlinks option
+        if ( $fnf.IO.l && ! $_remove-symlinks ) {
+          say "not processing dir {$fnf} because it's symlink"
+            if ( $_verbose );
+          next;
+        }
       }
       process-sub-dir( $root-dir, $fns, $proc );
     }
+
     elsif ( $fnf.IO.f ) {
       &$proc( $fnf0, $fnf );
     }
