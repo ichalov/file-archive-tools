@@ -27,7 +27,6 @@ $d.main();
 
 =head2 TODO
 
-=item Implement import file to prevent race conditions on 'to-download'
 =item Run only within certain timespan each day
 =item Additional options for `wget`
 
@@ -40,7 +39,8 @@ Victor Ichalov <ichalov@gmail.com>, 2020
 unit module Download-Dispatcher;
 
 my %dispatcher-storage = (
-  to-download => 'download.txt',
+  incoming => 'incoming.txt',
+  work-queue => 'download.txt',
   downloading => 'downloading.txt',
   complete => 'complete.txt',
 );
@@ -99,6 +99,7 @@ class Dispatcher is export {
   has Download $.d is rw;
 
   method main() {
+    self.copy-from-incoming();
     my @cur = self.get-current-download();
     if ( @cur ) {
       self.check-restart-download( @cur[0], @cur[1].Int );
@@ -108,8 +109,21 @@ class Dispatcher is export {
     }
   }
 
+  method copy-from-incoming() {
+    my $fn = self.control-file( 'incoming' );
+    my $cont;
+    if ( $fn.IO.e ) {
+      for $fn.IO.lines -> $l {
+        self.post-log-message( "Queueing incoming download: {$l}" );
+        $cont ~= $l ~ "\n";
+      }
+    }
+    spurt self.control-file( 'work-queue' ), $cont, :append;
+    spurt $fn, '';
+  }
+
   method add-download( Str $url ) {
-    my $fn = self.control-file( 'to-download' );
+    my $fn = self.control-file( 'work-queue' );
     if ( $fn.IO.e ) {
       my $dispatcher-downloads = $fn.IO.slurp;
       for $dispatcher-downloads.split("\n") -> $u {
@@ -122,7 +136,7 @@ class Dispatcher is export {
   }
 
   method next-download() {
-    my $fn = self.control-file( 'to-download' );
+    my $fn = self.control-file( 'work-queue' );
     if ( $fn.IO.e ) {
       for $fn.IO.lines -> $url {
         return $url if ( $url && $url !~~ m/^\s*\#/ );
@@ -140,7 +154,7 @@ class Dispatcher is export {
 
     my $target-size = $.d.get-file-size( $url );
 
-    my $fn0 = self.control-file( 'to-download' );
+    my $fn0 = self.control-file( 'work-queue' );
     my $fn = self.control-file( 'downloading' );
 
     if ( ! $fn0.IO.e ) {
