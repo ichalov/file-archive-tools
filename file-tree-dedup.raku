@@ -23,7 +23,7 @@ my $script-description = Q:c:to/EOT/;
     --remove-symlinks - The script doesn't remove symlinks unless this option
       specified. It won't remove symlinks referencing files under <dir0> even if
       the option is present.
-    --verbose - Print logs of all actions on STDOUT.
+    --silent - Don't print logs of all actions on STDOUT.
   EOT
 
 sub USAGE() {
@@ -46,7 +46,7 @@ my %dir0-md5sums = Empty;
 
 sub MAIN(
   Str $dir0, Str $dir,
-  Bool :$any-place, Bool :$verbose, Bool :$remove-symlinks
+  Bool :$any-place, Bool :$silent, Bool :$remove-symlinks
 ) {
   $d0 = append-slash-to-dir( $dir0 );
   unless ( $d0.IO.d ) {
@@ -59,7 +59,7 @@ sub MAIN(
     die "Can't find directory {$d}";
   }
 
-  $_verbose = $verbose;
+  $_verbose = ! $silent;
   $_remove-symlinks = $remove-symlinks;
 
   process-sub-dir( $d, '',
@@ -120,13 +120,13 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
       if ( $root-dir ne $d0 ) {
         # Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
         if ( is-dir-under-dir0( $fnf ) ) {
-          say "not processing dir {$fnf} because it's under source dir {$d0}"
+          say "{$fnf} -> skip (because it's under source dir {$d0})"
             if ( $_verbose );
           next;
         }
         # Skip going into symlinked dirs unless --remove-symlinks option
         if ( $fnf.IO.l && ! $_remove-symlinks ) {
-          say "not processing dir {$fnf} because it's symlink"
+          say "{$fnf} -> skip symlink"
             if ( $_verbose );
           next;
         }
@@ -169,12 +169,12 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
 # is specified.
 sub unlink-file ( Str $fnf ) {
   if ( is-dir-under-dir0( $fnf ) ) {
-    say "not processing {$fnf} because it's under source dir {$d0}"
+    say "{$fnf} -> skip (because it's under source dir {$d0})"
       if ( $_verbose );
     return False;
   }
   if ( ! $_remove-symlinks && $fnf.IO.l ) {
-    say "skip deleting symlink: {$fnf}" if ( $_verbose );
+    say "{$fnf} -> skip (file symlink)" if ( $_verbose );
     return False;
   }
   unlink( $fnf );
