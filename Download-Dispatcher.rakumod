@@ -111,7 +111,7 @@ class Dispatcher is export {
 
   method copy-from-incoming() {
     my $fn = self.control-file( 'incoming' );
-    my $cont;
+    my $cont = '';
     if ( $fn.IO.e ) {
       for $fn.IO.lines -> $l {
         self.post-log-message( "Queueing incoming download: {$l}" );
