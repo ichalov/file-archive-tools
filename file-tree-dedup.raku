@@ -7,7 +7,6 @@
     Unpack tarballs in <dir0> for detailed comparison
     Implement recycled bin - move duplicate files there instead of just deleting
     Add a mode to remove files that also within a tarball in the same directory
-    Split into --remove-file-symlinks and --remove-dir-symlinks
     Add protection against looped symlink dirs if needed
     Use Digest::MD5 to improve speed on small files
 
@@ -21,9 +20,15 @@ my $script-description = Q:c:to/EOT/;
   Options:
     --any-place - Relaxes the requirement of the same position and deletes file
       from <dir> if the file with same md5sum is found anywhere under <dir0>.
-    --remove-symlinks - The script doesn't remove symlinks unless this option
-      specified. It won't remove symlinks referencing files under <dir0> even if
-      the option is present.
+    --keep-file-symlinks - By default the script removes symlinks to files that
+      are copies of correspondent <dir0> files (either the link leads to a file
+      under <dir0> or not). The linked file is left intact in any case. This
+      option prevents deletion of any file symlinks at all.
+    --process-dir-symlinks - The script doesn't go into symlink dirs under <dir>
+      unless this option is specified. Using this option may lead to deletion of
+      files or the whole linked directory (even if it's outside <dir>) in case
+      the files are identical to the contained under <dir0>. It won't delete any
+      files or dirs under <dir0> though.
     --silent - Don't print logs of all actions on STDOUT.
   EOT
 
@@ -38,7 +43,8 @@ my $d0-full;
 
 # Global storages option presence
 my Bool $_verbose;
-my Bool $_remove-symlinks;
+my Bool $_keep-file-symlinks;
+my Bool $_process-dir-symlinks;
 
 # Global hash for md5sums of files in <dir0> in case of --any-place.
 # TODO: Better re-make using state variable, but difficult.
@@ -47,7 +53,10 @@ my %dir0-md5sums = Empty;
 
 sub MAIN(
   Str $dir0, Str $dir,
-  Bool :$any-place, Bool :$silent, Bool :$remove-symlinks
+  Bool :$any-place,
+  Bool :$keep-file-symlinks,
+  Bool :$process-dir-symlinks,
+  Bool :$silent,
 ) {
   $d0 = append-slash-to-dir( $dir0 );
   unless ( $d0.IO.d ) {
@@ -61,7 +70,8 @@ sub MAIN(
   }
 
   $_verbose = ! $silent;
-  $_remove-symlinks = $remove-symlinks;
+  $_keep-file-symlinks = $keep-file-symlinks;
+  $_process-dir-symlinks = $process-dir-symlinks;
 
   process-sub-dir( $d, '',
 
@@ -119,15 +129,15 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
       # collect md5sums from <dir0> for --any-place option
       # TODO: replace '$root-dir ne $d0' with something more reliable 
       if ( $root-dir ne $d0 ) {
-        # Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
-        if ( is-dir-under-dir0( $fnf ) ) {
-          say "{$fnf} -> skip (because it's under source dir {$d0})"
+        # Skip going into symlinked dirs unless --process-dir-symlinks option
+        if ( $fnf.IO.l && ! $_process-dir-symlinks ) {
+          say "{$fnf} -> skip dir symlink"
             if ( $_verbose );
           next;
         }
-        # Skip going into symlinked dirs unless --remove-symlinks option
-        if ( $fnf.IO.l && ! $_remove-symlinks ) {
-          say "{$fnf} -> skip symlink"
+        # Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
+        if ( is-dir-under-dir0( $fnf ) ) {
+          say "{$fnf} -> skip (because it's under source dir {$d0})"
             if ( $_verbose );
           next;
         }
@@ -147,8 +157,8 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
   if ( $dir !~~ m:i/ ^ $d0 / ) {
     if ( $dir.IO.l ) {
       # Remove symlinks to empty directories if they don't contain files and
-      # --remove-symlinks is specified.
-      if ( $_remove-symlinks && ! $dir.IO.dir.elems ) {
+      # --process-dir-symlinks is specified.
+      if ( $_process-dir-symlinks && ! $dir.IO.dir.elems ) {
         my $linked-dir = $dir.IO.resolve(:completely).Str;
         unlink( $dir );
         say "{$dir} -> remove symlink to empty dir" if $_verbose;
@@ -164,17 +174,17 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
 }
 
 # Perform additional checks before calling unlink() on any files. This is
-# supposed to prevent deleting the files under <dir0> if they are symlinked
-# to target directory or --any-place option is used with two overlapping
-# directories. Also don't remove any symlinks if no --remove-symlinks option
-# is specified.
+# supposed to prevent deleting the files under <dir0> if they are in a dir
+# symlinked from target directory or --any-place option is used with two
+# overlapping directories. Also don't remove any symlinks if
+# --keep-file-symlinks option is specified.
 sub unlink-file ( Str $fnf ) {
   if ( is-dir-under-dir0( $fnf ) ) {
     say "{$fnf} -> skip (because it's under source dir {$d0})"
       if ( $_verbose );
     return False;
   }
-  if ( ! $_remove-symlinks && $fnf.IO.l ) {
+  if ( $_keep-file-symlinks && $fnf.IO.l ) {
     say "{$fnf} -> skip (file symlink)" if ( $_verbose );
     return False;
   }
