@@ -28,8 +28,9 @@ my $script-description = Q:c:to/EOT/;
       unless this option is specified. Using this option may lead to deletion of
       files or the whole linked directory (even if it's outside <dir>) in case
       the files are identical to the contained under <dir0>. It won't delete any
-      files or dirs under <dir0> though.
-    --silent - Don't print logs of all actions on STDOUT.
+      files or dirs under <dir0> but can delete a dir that is symlinked from
+      both <dir0> and <dir>.
+    --silent - Don't print logs of script actions on STDOUT.
   EOT
 
 sub USAGE() {
@@ -107,8 +108,10 @@ sub MAIN(
             }
           }
         }
-      }
+      },
 
+    :delete-dir-if-empty( &delete-dir-if-empty ),
+    :dir-symlink-checks( &dir-symlink-checks ),
   );
 }
 
@@ -116,7 +119,10 @@ sub MAIN(
 # of initial collection of md5sums for --any-place option).
 # $proc is how each leaf file should be processed (takes two full file names:
 # first from <dir0> and second from <dir> ).
-sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
+sub process-sub-dir(
+  Str $root-dir, $sub-dir, Code $proc,
+  Code :$delete-dir-if-empty?, Code :$dir-symlink-checks?,
+) {
   my $dir = $root-dir ~ $sub-dir;
   for $dir.IO.dir -> $fn0 {
     my $fn = $fn0.basename;
@@ -125,33 +131,53 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
     my $fnf0 = $d0 ~ $fns; # NB: Use of a global !!!
 
     if ( $fnf.IO.d ) {
-      # Only perform dir symlink checks and skips if it's not an invocation to
-      # collect md5sums from <dir0> for --any-place option
-      # TODO: replace '$root-dir ne $d0' with something more reliable 
-      if ( $root-dir ne $d0 ) {
-        # Skip going into symlinked dirs unless --process-dir-symlinks option
-        if ( $fnf.IO.l && ! $_process-dir-symlinks ) {
-          say "{$fnf} -> skip dir symlink"
-            if ( $_verbose );
-          next;
-        }
-        # Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
-        if ( is-dir-under-dir0( $fnf ) ) {
-          say "{$fnf} -> skip (because it's under source dir {$d0})"
-            if ( $_verbose );
+      if ( $dir-symlink-checks ) {
+        if ( my $msg = $dir-symlink-checks( $fnf ) ) {
+          say $msg;
           next;
         }
       }
-      process-sub-dir( $root-dir, $fns, $proc );
-    }
 
+      process-sub-dir( $root-dir, $fns, $proc,
+        :delete-dir-if-empty( $delete-dir-if-empty ),
+        :dir-symlink-checks( $dir-symlink-checks ),
+      );
+    }
     elsif ( $fnf.IO.f ) {
       &$proc( $fnf0, $fnf );
     }
   }
 
+  # Delete current dir or dir symlink if it turns out to be empty after the
+  # removals in $proc .
+  if ( $delete-dir-if-empty ) {
+    $delete-dir-if-empty( $dir );
+  }
+}
+
+# Perform additional checks before calling unlink() on any files. This is
+# supposed to prevent deleting the files under <dir0> if they are in a dir
+# symlinked from target directory or --any-place option is used with two
+# overlapping directories. Also don't remove any symlinks if
+# --keep-file-symlinks option is specified.
+sub unlink-file ( Str $fnf ) {
+  if ( is-dir-under-dir0( $fnf ) ) {
+    say "{$fnf} -> skip (because it's under source dir {$d0})"
+      if ( $_verbose );
+    return False;
+  }
+  if ( $_keep-file-symlinks && $fnf.IO.l ) {
+    say "{$fnf} -> skip (file symlink)" if ( $_verbose );
+    return False;
+  }
+  unlink( $fnf );
+  return True;
+}
+
+sub delete-dir-if-empty( Str $_dir ) {
+  my $dir = $_dir;
   # Only delete current dir if it turns out to be empty after the removals
-  # in $proc .
+  # in $proc calls in process-sub-dir() .
   # Only do that if $dir doesn't contain $d0 to prevent deleting empty
   # directories from <dir0> in --any-place $proc initialization run.
   if ( $dir !~~ m:i/ ^ $d0 / ) {
@@ -173,23 +199,16 @@ sub process-sub-dir( Str $root-dir, $sub-dir, Code $proc ) {
   }
 }
 
-# Perform additional checks before calling unlink() on any files. This is
-# supposed to prevent deleting the files under <dir0> if they are in a dir
-# symlinked from target directory or --any-place option is used with two
-# overlapping directories. Also don't remove any symlinks if
-# --keep-file-symlinks option is specified.
-sub unlink-file ( Str $fnf ) {
+sub dir-symlink-checks( Str $fnf ) {
+  # Skip going into symlinked dirs unless --process-dir-symlinks option
+  if ( $fnf.IO.l && ! $_process-dir-symlinks ) {
+    return "{$fnf} -> skip dir symlink"
+  }
+  # Skip dirs that are inside <dir0> when $root-dir isn't <dir0>
   if ( is-dir-under-dir0( $fnf ) ) {
-    say "{$fnf} -> skip (because it's under source dir {$d0})"
-      if ( $_verbose );
-    return False;
+    return "{$fnf} -> skip (because it's under source dir {$d0})"
   }
-  if ( $_keep-file-symlinks && $fnf.IO.l ) {
-    say "{$fnf} -> skip (file symlink)" if ( $_verbose );
-    return False;
-  }
-  unlink( $fnf );
-  return True;
+  return '';
 }
 
 sub is-dir-under-dir0 ( Str $dir ) {
