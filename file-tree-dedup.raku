@@ -27,9 +27,8 @@ my $script-description = Q:c:to/EOT/;
     --process-dir-symlinks - The script doesn't go into symlink dirs under <dir>
       unless this option is specified. Using this option may lead to deletion of
       files or the whole linked directory (even if it's outside <dir>) in case
-      the files are identical to the contained under <dir0>. It won't delete any
-      files or dirs under <dir0> but can delete a dir that is symlinked from
-      both <dir0> and <dir>.
+      the files are identical to the contained under <dir0>. But it won't delete
+      any files or dirs under <dir0> or linked from <dir0>.
     --silent - Don't print logs of script actions on STDOUT.
   EOT
 
@@ -47,10 +46,11 @@ my Bool $_verbose;
 my Bool $_keep-file-symlinks;
 my Bool $_process-dir-symlinks;
 
-# Global hash for md5sums of files in <dir0> in case of --any-place.
+# Global hashes for md5sums and full paths after dereferencing symlinks of files
+# under <dir0> .
 # TODO: Better re-make using state variable, but difficult.
 my %dir0-md5sums = Empty;
-
+my %dir0-full-paths = Empty;
 
 sub MAIN(
   Str $dir0, Str $dir,
@@ -79,17 +79,19 @@ sub MAIN(
     # Use different $proc functions depending on --any-place.
     $any-place ??
       -> $a, $b {
-        # Calculate the whole list of <dir0> md5sums on first invocation.
+        # Calculate the whole list of <dir0> md5sums and full paths on first
+        # invocation.
         if ( ! %dir0-md5sums ) {
           process-sub-dir( $d0, '', -> $aa, $bb {
             my $md5 = file_md5_hex( $bb );
             %dir0-md5sums{ $md5 } = $bb;
+            %dir0-full-paths{ $bb.IO.resolve(:completely).Str } = $bb;
           } );
         }
 
         my $md5 = file_md5_hex( $b );
         if ( %dir0-md5sums{ $md5 }:exists ) {
-          if ( unlink-file( $b ) ) {
+          if ( delete-file( $b ) ) {
             say "{$b} -> remove ( {%dir0-md5sums{ $md5 }} )" if $_verbose;
           }
         }
@@ -103,7 +105,7 @@ sub MAIN(
           my $md5 = file_md5_hex( $b ) || '--';
           my $md5_0 = file_md5_hex( $a ) || '---';
           if ( $md5_0 eq $md5 ) {
-            if ( unlink-file( $b ) ) {
+            if ( delete-file( $b ) ) {
               say "{$b} -> remove" if $_verbose;
             }
           }
@@ -155,19 +157,33 @@ sub process-sub-dir(
   }
 }
 
-# Perform additional checks before calling unlink() on any files. This is
-# supposed to prevent deleting the files under <dir0> if they are in a dir
-# symlinked from target directory or --any-place option is used with two
-# overlapping directories. Also don't remove any symlinks if
-# --keep-file-symlinks option is specified.
-sub unlink-file ( Str $fnf ) {
+# Perform additional checks before calling unlink() on any files.
+sub delete-file ( Str $fnf ) {
+  # Prevent deleting the files under <dir0> if they are in a dir symlinked from
+  # target directory or --any-place option is used with two overlapping
+  # directories.
   if ( is-dir-under-dir0( $fnf ) ) {
     say "{$fnf} -> skip (because it's under source dir {$d0})"
       if ( $_verbose );
     return False;
   }
+  # Don't remove any symlinks if --keep-file-symlinks option is specified.
   if ( $_keep-file-symlinks && $fnf.IO.l ) {
     say "{$fnf} -> skip (file symlink)" if ( $_verbose );
+    return False;
+  }
+  # Check that the deleted file is not linked from anywhere under <dir0>. This
+  # is mainly to prevent deleting a directory outside of both <dir0> and <dir>
+  # which is symlinked from both. But also can prevent deleting file from
+  # <dir> that is symlinked from <dir0>.
+  unless ( %dir0-full-paths ) {
+    process-sub-dir( $d0, '', -> $aa, $bb {
+      %dir0-full-paths{ $bb.IO.resolve(:completely).Str } = $bb;
+    } );
+  }
+  if ( %dir0-full-paths{ $fnf.IO.resolve(:completely).Str }:exists ) {
+    say "{$fnf} -> skip (linked from source dir "
+      ~ %dir0-full-paths{ $fnf.IO.resolve(:completely).Str } ~ " )";
     return False;
   }
   unlink( $fnf );
@@ -211,8 +227,12 @@ sub dir-symlink-checks( Str $fnf ) {
   return '';
 }
 
-sub is-dir-under-dir0 ( Str $dir ) {
-  if ( $dir.IO.resolve(:completely).Str ~~ m:i/ $d0-full / ) {
+sub is-dir-under-dir0 ( Str $dir, Str $dir0? ) {
+  my $d0-full-local = $d0-full;
+  if ( $dir0 ) {
+    $d0-full-local = append-slash-to-dir( $dir0.IO.resolve(:completely).Str );
+  }
+  if ( $dir.IO.resolve(:completely).Str ~~ m:i/ $d0-full-local / ) {
     return True;
   }
   return False;
