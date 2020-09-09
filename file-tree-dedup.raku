@@ -4,6 +4,7 @@
 
   TODO:
     Add option to replace the duplicate files with symlinks to <dir0>
+    Add option to match deleted file basename if --any-place present
     Unpack tarballs in <dir0> for detailed comparison
     Implement recycled bin - move duplicate files there instead of just deleting
     Add a mode to remove files that also within a tarball in the same directory
