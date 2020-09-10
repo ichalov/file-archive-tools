@@ -9,7 +9,6 @@
     Implement recycled bin - move duplicate files there instead of just deleting
     Add a mode to remove files that also within a tarball in the same directory
     Add protection against looped symlink dirs if needed
-    Use Digest::MD5 to improve speed on small files
 
 )
 
@@ -247,12 +246,17 @@ sub append-slash-to-dir ( Str $dir ) returns Str {
   return $d;
 }
 
-# Since Digest::MD5 is not in the default rakubrew package, let's use external
-# command.
 sub file_md5_hex ( Str $file-name ) returns Str {
+  try require Digest::MD5;
+  if ( ! $! ) {
+    return ::('Digest::MD5').new.md5_hex: $file-name.IO.slurp;
+  }
+
+  # Only use the system utility if the module above is not available
   my $md5sum = '/usr/bin/md5sum';
   if ( ! $md5sum.IO.e ) {
-    die "The script depends on {$md5sum} system utility being installed.";
+    die "The script depends on Digest::MD5 module or {$md5sum} system utility "
+      ~ "being installed.";
   }
 
   my $proc = run( $md5sum, $file-name, :out );
