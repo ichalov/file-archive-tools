@@ -1,10 +1,9 @@
 #`(
   file-tree-dedup.raku
-  Author: <ichalov@gmail.com>, 2020-08-12
+  Author: Victor Ichalov <ichalov@gmail.com>, 2020-08
 
   TODO:
     Add option to replace the duplicate files with symlinks to <dir0>
-    Add option to match deleted file basename if --any-place present
     Unpack tarballs in <dir0> for detailed comparison
     Implement recycled bin - move duplicate files there instead of just deleting
     Add a mode to remove files that also within a tarball in the same directory
@@ -19,7 +18,10 @@ my $script-description = Q:c:to/EOT/;
   in exactly same subdir of <dir0>.
   Options:
     --any-place - Relaxes the requirement of the same position and deletes file
-      from <dir> if the file with same md5sum is found anywhere under <dir0>.
+      from <dir> if the file with same md5sum is found anywhere under <dir0>
+      (but has the same basename as in <dir0>).
+    --any-basename - Further relax matching requirements and delete files based
+      on md5sum value only, even if they have different file name.
     --keep-file-symlinks - By default the script removes symlinks to files that
       are copies of correspondent <dir0> files (either the link leads to a file
       under <dir0> or not). The linked file is left intact in any case. This
@@ -43,6 +45,7 @@ my $d0-full;
 
 # Global storages option presence
 my Bool $_verbose;
+my Bool $_any-basename;
 my Bool $_keep-file-symlinks;
 my Bool $_process-dir-symlinks;
 
@@ -55,6 +58,7 @@ my %dir0-full-paths = Empty;
 sub MAIN(
   Str $dir0, Str $dir,
   Bool :$any-place,
+  Bool :$any-basename,
   Bool :$keep-file-symlinks,
   Bool :$process-dir-symlinks,
   Bool :$silent,
@@ -74,6 +78,11 @@ sub MAIN(
   $_keep-file-symlinks = $keep-file-symlinks;
   $_process-dir-symlinks = $process-dir-symlinks;
 
+  $_any-basename = $any-basename;
+  if ( $any-basename && ! $any-place ) {
+    die '--any-basename option should only be used along with --any-place';
+  }
+
   process-sub-dir( $d, '',
 
     # Use different $proc functions depending on --any-place.
@@ -84,15 +93,21 @@ sub MAIN(
         if ( ! %dir0-md5sums ) {
           process-sub-dir( $d0, '', -> $aa, $bb {
             my $md5 = file_md5_hex( $bb );
-            %dir0-md5sums{ $md5 } = $bb;
+            # Save file names as a list because there may be several files with
+            # the same md5sum under <dir0>
+            push %dir0-md5sums{ $md5 }, $bb;
             %dir0-full-paths{ $bb.IO.resolve(:completely).Str } = $bb;
           } );
         }
 
         my $md5 = file_md5_hex( $b );
         if ( %dir0-md5sums{ $md5 }:exists ) {
-          if ( delete-file( $b ) ) {
-            say "{$b} -> remove ( {%dir0-md5sums{ $md5 }} )" if $_verbose;
+          my $src-file-name = %dir0-md5sums{ $md5 }[0];
+          if ( %dir0-md5sums{ $md5 }.elems > 1 ) {
+            $src-file-name ~= ', ...';
+          }
+          if ( delete-file( $b, $md5 ) ) {
+            say "{$b} -> remove ( { $src-file-name } )" if $_verbose;
           }
         }
       }
@@ -158,7 +173,7 @@ sub process-sub-dir(
 }
 
 # Perform additional checks before calling unlink() on any files.
-sub delete-file ( Str $fnf ) {
+sub delete-file ( Str $fnf, Str $checksum? ) {
   # Prevent deleting the files under <dir0> if they are in a dir symlinked from
   # target directory or --any-place option is used with two overlapping
   # directories.
@@ -185,6 +200,25 @@ sub delete-file ( Str $fnf ) {
     say "{$fnf} -> skip (linked from source dir "
       ~ %dir0-full-paths{ $fnf.IO.resolve(:completely).Str } ~ " )";
     return False;
+  }
+  # Compare base name of the file to delete with the list in %dir0-md5sums (if
+  # it's not empty which indicate --any-place option is present). Only delete
+  # the file if a file with the same basename exists under <dir0> or
+  # --any-basename option is specified.
+  if ( %dir0-md5sums && ! $_any-basename ) {
+    my $basename = $fnf.IO.basename;
+    my Bool $basename-match = False;
+    for %dir0-md5sums{ $checksum } -> $file0 {
+      if ( $basename eq $file0.IO.basename ) {
+        $basename-match = True;
+        last;
+      }
+    }
+    unless ( $basename-match ) {
+      say "{$fnf} -> skip (no matching basename among files with the same "
+        ~ "checksum under <dir0>)";
+      return False;
+    }
   }
   unlink( $fnf );
   return True;
