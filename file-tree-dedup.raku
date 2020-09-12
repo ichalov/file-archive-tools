@@ -18,10 +18,10 @@ my $script-description = Q:c:to/EOT/;
   in exactly same subdir of <dir0>.
   Options:
     --any-place - Relaxes the requirement of the same position and deletes file
-      from <dir> if the file with same md5sum is found anywhere under <dir0>
+      from <dir> if the file with same checksum is found anywhere under <dir0>
       (but has the same basename as in <dir0>).
     --any-basename - Further relax matching requirements and delete files based
-      on md5sum value only, even if they have different file name.
+      on checksum value only, even if they have different file name.
     --keep-file-symlinks - By default the script removes symlinks to files that
       are copies of correspondent <dir0> files (either the link leads to a file
       under <dir0> or not). The linked file is left intact in any case. This
@@ -49,10 +49,10 @@ my Bool $_any-basename;
 my Bool $_keep-file-symlinks;
 my Bool $_process-dir-symlinks;
 
-# Global hashes for md5sums and full paths after dereferencing symlinks of files
+# Global hashes for checksums and full paths after dereferencing symlinks of files
 # under <dir0> .
 # TODO: Better re-make using state variable, but difficult.
-my %dir0-md5sums = Empty;
+my %dir0-checksums = Empty;
 my %dir0-full-paths = Empty;
 
 sub MAIN(
@@ -88,28 +88,28 @@ sub MAIN(
     # Use different $proc functions depending on --any-place.
     $any-place ??
       -> $a, $b {
-        # Calculate the whole list of <dir0> md5sums and full paths on first
+        # Calculate the whole list of <dir0> checksums and full paths on first
         # invocation.
-        if ( ! %dir0-md5sums ) {
+        if ( ! %dir0-checksums ) {
           process-sub-dir( $d0, '', -> $aa, $bb {
-            my $md5 = file_md5_hex( $bb );
+            my $checksum = get-file-checksum( $bb );
             # Save file names as a list because there may be several files with
-            # the same md5sum under <dir0>
-            push %dir0-md5sums{ $md5 }, $bb;
+            # the same checksum under <dir0>
+            push %dir0-checksums{ $checksum }, $bb;
             %dir0-full-paths{ $bb.IO.resolve(:completely).Str } = $bb;
           } );
         }
 
-        my $md5 = file_md5_hex( $b );
-        if ( %dir0-md5sums{ $md5 }:exists ) {
+        my $checksum = get-file-checksum( $b );
+        if ( %dir0-checksums{ $checksum }:exists ) {
           # Prefer showing in logs the file that has the same basename
-          my $src-file-name = %dir0-md5sums{ $md5 }.sort(
+          my $src-file-name = %dir0-checksums{ $checksum }.sort(
             { .Str.IO.basename eq $b.IO.basename ?? 0 !! 1 }
           )[0];
-          if ( %dir0-md5sums{ $md5 }.elems > 1 ) {
+          if ( %dir0-checksums{ $checksum }.elems > 1 ) {
             $src-file-name ~= ', ...';
           }
-          if ( delete-file( $b, $md5 ) ) {
+          if ( delete-file( $b, $checksum ) ) {
             say "{$b} -> remove ( { $src-file-name } )" if $_verbose;
           }
         }
@@ -117,12 +117,12 @@ sub MAIN(
     !!
       -> $a, $b {
         # Compare the files in <dir0> and <dir>. Use different defaults for
-        # both calculations to prevent removals if file_md5_hex() returns empty
-        # value.
+        # both calculations to prevent removals if get-file-checksum() returns
+        # empty value.
         if ( $a.IO.f ) {
-          my $md5 = file_md5_hex( $b ) || '--';
-          my $md5_0 = file_md5_hex( $a ) || '---';
-          if ( $md5_0 eq $md5 ) {
+          my $cs = get-file-checksum( $b ) || '--';
+          my $cs_0 = get-file-checksum( $a ) || '---';
+          if ( $cs_0 eq $cs ) {
             if ( delete-file( $b ) ) {
               say "{$b} -> remove" if $_verbose;
             }
@@ -149,7 +149,7 @@ sub MAIN(
 }
 
 # NB: This function is recursive and iterates through <dir> (or <dir0> in case
-# of initial collection of md5sums for --any-place option).
+# of initial collection of checksums for --any-place option).
 # $proc is how each leaf file should be processed (takes two full file names:
 # first from <dir0> and second from <dir> ).
 sub process-sub-dir(
@@ -217,14 +217,14 @@ sub delete-file ( Str $fnf, Str $checksum? ) {
       ~ %dir0-full-paths{ $fnf.IO.resolve(:completely).Str } ~ " )";
     return False;
   }
-  # Compare base name of the file to delete with the list in %dir0-md5sums (if
+  # Compare base name of the file to delete with the list in %dir0-ckecksums (if
   # it's not empty which indicate --any-place option is present). Only delete
   # the file if a file with the same basename exists under <dir0> or
   # --any-basename option is specified.
-  if ( %dir0-md5sums && ! $_any-basename ) {
+  if ( %dir0-checksums && ! $_any-basename ) {
     my $basename = $fnf.IO.basename;
     my Bool $basename-match = False;
-    for %dir0-md5sums{ $checksum } -> $file0 {
+    for %dir0-checksums{ $checksum } -> $file0 {
       if ( $basename eq $file0.IO.basename ) {
         $basename-match = True;
         last;
@@ -294,6 +294,10 @@ sub append-slash-to-dir ( Str $dir ) returns Str {
     $d ~= '/';
   }
   return $d;
+}
+
+sub get-file-checksum( Str $file-name ) returns Str {
+  return file_md5_hex( $file-name );
 }
 
 sub file_md5_hex ( Str $file-name ) returns Str {
