@@ -102,7 +102,10 @@ sub MAIN(
 
         my $md5 = file_md5_hex( $b );
         if ( %dir0-md5sums{ $md5 }:exists ) {
-          my $src-file-name = %dir0-md5sums{ $md5 }[0];
+          # Prefer showing in logs the file that has the same basename
+          my $src-file-name = %dir0-md5sums{ $md5 }.sort(
+            { .Str.IO.basename eq $b.IO.basename ?? 0 !! 1 }
+          )[0];
           if ( %dir0-md5sums{ $md5 }.elems > 1 ) {
             $src-file-name ~= ', ...';
           }
