@@ -130,6 +130,19 @@ sub MAIN(
     :delete-dir-if-empty( &delete-dir-if-empty ),
     :dir-symlink-checks( &dir-symlink-checks ),
   );
+
+  CATCH {
+    # Only show usage on exceptions initiated directly in MAIN and not deeper
+    # in callstack.
+    if ( .gist ~~ m/ ^^ \s* in \s+ (.+) / ) {
+      if ( $/[0].Str ~~ m/ ^ sub \s+ MAIN / ) {
+        say "ERROR: " ~ .message ~ "\n\n";
+        USAGE();
+        say "\n\nERROR: " ~ .message ~ "\n";
+        exit;
+      }
+    }
+  }
 }
 
 # NB: This function is recursive and iterates through <dir> (or <dir0> in case
