@@ -10,7 +10,7 @@ An example of crontab script that could be used with this module:
 use lib <.>;
 use Download-Dispatcher;
 
-my $dl = Download.new: :limit-rate(160000) :download-dir('.');
+my $dl = Wget-Download.new: :limit-rate(160000) :download-dir('.');
 my $d = Dispatcher.new :d($dl) :dispatcher-dir('.');
 
 $d.url-converters<url> = {
@@ -45,8 +45,36 @@ my %dispatcher-storage = (
   complete => 'complete.txt',
 );
 
+role Download is export {
+
+  has %.file-params-cache = Empty;
+
+  method start-download( Str $url, Str $file-name ) {
+    die "Abstract method called";
+  }
+
+  method download-process-exists( Str $url ) returns Bool {
+    die "Abstract method called";
+  }
+
+  method get-file-params( Str $url ) returns Hash {
+    die "Abstract method called";
+  }
+
+  method get-file-params-cached( Str $url ) returns Hash {
+    if ( %.file-params-cache{ $url }:exists ) {
+      return %.file-params-cache{ $url };
+    }
+    else {
+      my %file-params = self.get-file-params( $url );
+      %.file-params-cache{ $url } = %file-params;
+      return %file-params;
+    }
+  }
+}
+
 # NB: depends on wget, screen and ps.
-class Download is export {
+class Wget-Download does Download is export {
 
   has $.download-dir is rw = '.';
 
@@ -59,11 +87,11 @@ class Download is export {
     if ( $.limit-rate ) {
       @cmd.push: "--limit-rate={$.limit-rate}";
     }
-    @cmd.push: "'{$url}'", "-O {$.download-dir}/{$file-name}";
+    @cmd.push: "'{$url}'", '-O', "'{$.download-dir}/{$file-name}'";
     shell( @cmd.join: ' ' );
   }
 
-  method wget-process-exists( Str $url ) returns Bool {
+  method download-process-exists( Str $url ) returns Bool {
     my $proc = run( '/bin/ps', 'auxww', :out );
     my $out = $proc.out.slurp;
 
@@ -73,15 +101,23 @@ class Download is export {
     return False;
   }
 
-  method get-file-size( Str $url ) returns Int {
+  method get-file-params( Str $url ) returns Hash {
     my $proc = run(
       $!wget, '--server-response', '--spider', $url, :err
     );
     my $out = $proc.err.slurp;
-    if ( my $match = $out ~~ m:i/content\-length\s*\:\s*(\d+)/ ) {
-      return $match[0].Int;
+    my %ret = Empty;
+    if ( $out ~~ m:i/content\-length\s*\:\s*(\d+)/ ) {
+      %ret<size-bytes> = $/[0].Int;
     }
-    return 0;
+    if ( $out ~~ m:i/content\-disposition\s*\:.+?filename\=\"(.+?)\"/ ) {
+      %ret<file-name> = $/[0].Str;
+    }
+    # TODO: Handle RFC 5987 reqs better
+    if ( $out ~~ m:i/content\-disposition\s*\:.+?filename\*?\=.+\'(.+?)$$/ ) {
+      %ret<file-name> = $/[0].Str;
+    }
+    return %ret;
   }
 }
 
@@ -147,12 +183,9 @@ class Dispatcher is export {
   }
 
   method schedule-download( Str $url0 ) {
-    unless ( $.d ) {
-      $.d = Download.new;
-    }
     my $url = %.url-converters<url>( $url0 );
 
-    my $target-size = $.d.get-file-size( $url );
+    my $target-size = $.d.get-file-params-cached( $url )<size-bytes>;
 
     my $fn0 = self.control-file( 'work-queue' );
     my $fn = self.control-file( 'downloading' );
@@ -194,14 +227,15 @@ class Dispatcher is export {
   }
 
   method check-restart-download( Str $url0, Int $size ) {
-    unless ( $.d ) {
-      $.d = Download.new;
-    }
 
     my $url = %.url-converters<url>( $url0 );
-    my $file-name = %.url-converters<file-name>( $url0 );
 
-    if ( ! $.d.wget-process-exists( $url ) ) {
+    # NB: It's important to have consistent file name over time, so either
+    # get it from downloader or calculate from URL.
+    my $file-name = $.d.get-file-params-cached( $url )<file-name>
+                 // %.url-converters<file-name>( $url0 );
+
+    if ( ! $.d.download-process-exists( $url ) ) {
       my $target_fn = $.d.download-dir ~ '/' ~ $file-name;
       if ( $target_fn.IO.e ) {
         my $d_size = $target_fn.IO.s;
