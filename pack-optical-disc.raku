@@ -136,6 +136,7 @@ sub get-container-name-from-file-set ( Str $file-set ) {
 sub format-int( Int $n0 ) {
   my $n = $n0.flip;
   $n ~~ s:g/(\d ** 3)/$0,/;
+  $n ~~ s/\,$//;
   return $n.flip;
 }
 
