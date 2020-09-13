@@ -5,6 +5,7 @@
 
   TODO:
     Progress bar during calculation
+    Output correspondent mkisofs commands
     Feed from `ls -l` instead of live directory
     Get rid of global variables
     Add parallelization
