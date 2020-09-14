@@ -47,6 +47,8 @@ my %dispatcher-storage = (
 
 role Download is export {
 
+  has $.download-dir is rw = '.';
+
   has %.file-params-cache = Empty;
 
   method start-download( Str $url, Str $file-name ) {
@@ -75,8 +77,6 @@ role Download is export {
 
 # NB: depends on wget, screen and ps.
 class Wget-Download does Download is export {
-
-  has $.download-dir is rw = '.';
 
   has $.limit-rate is rw; # in bytes
 
@@ -116,6 +116,77 @@ class Wget-Download does Download is export {
     # TODO: Handle RFC 5987 reqs better
     if ( $out ~~ m:i/content\-disposition\s*\:.+?filename\*?\=.+\'(.+?)$$/ ) {
       %ret<file-name> = $/[0].Str;
+    }
+    return %ret;
+  }
+}
+
+# NB: depends on youtube-dl, screen and ps.
+class YT-DL-Download does Download is export {
+
+  has $.limit-rate is rw; # in bytes
+
+  has $.youtube-dl = '/usr/bin/youtube-dl';
+
+  has $!format-id;
+
+  method start-download( $url, $file-name ) {
+    my @cmd = ( '/usr/bin/screen', '-d -m', $.youtube-dl );
+    if ( $.limit-rate ) {
+      @cmd.push: '-r', "{$.limit-rate}";
+    }
+    if ( $!format-id ) {
+      @cmd.push: '-f', "{$!format-id}";
+    }
+    @cmd.push: "'{$url}'";
+    shell( @cmd.join: ' ' );
+  }
+
+  method download-process-exists( Str $url ) returns Bool {
+    my $proc = run( '/bin/ps', 'auxww', :out );
+    my $out = $proc.out.slurp;
+
+    if ( $out ~~ m:i/ \W youtube\-dl \W .+? $url / ) {
+      return True;
+    }
+    return False;
+  }
+
+  method get-file-params( Str $url ) returns Hash {
+
+    use JSON::Tiny;
+
+    if ( $.download-dir.IO.d ) {
+      chdir( $.download-dir );
+    }
+    else {
+      die( "Can't open download dir: {$.download-dir}" );
+    }
+
+    my $proc = run(
+      $.youtube-dl, '--write-info-json', '--skip-download', $url, :out
+    );
+    my $out = $proc.out.slurp;
+    my %ret = Empty;
+    my $json-file-name;
+    if ( $out ~~ m:i/
+      ^^ '[info] Writing video description metadata as JSON to: ' \s* (.+) $$
+    / ) {
+      $json-file-name = $/[0].Str;
+      my $json = from-json( $json-file-name.IO.slurp );
+
+      # Find format with definite file size and 720p resolution
+      for |$json<formats> -> $fmt {
+        if ( $fmt<format_note> eq '720p' && $fmt<filesize> ) {
+          %ret<file-name> = $json-file-name;
+          %ret<file-name> ~~ s:i/\.info\.json\s*$/.$fmt<ext>/;
+          %ret<size-bytes> = $fmt<filesize>;
+          $!format-id = $fmt<format_id>;
+        }
+      }
+    }
+    if ( $json-file-name && $json-file-name.IO.f ) {
+      $json-file-name.IO.unlink;
     }
     return %ret;
   }
