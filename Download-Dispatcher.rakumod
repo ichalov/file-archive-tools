@@ -83,12 +83,12 @@ class Wget-Download does Download is export {
   has $!wget = '/usr/bin/wget';
 
   method start-download( $url, $file-name ) {
-    my @cmd = ( '/usr/bin/screen', '-d -m', $!wget, '-c' );
+    my @cmd = ( '/usr/bin/screen', '-d', '-m', $!wget, '-c' );
     if ( $.limit-rate ) {
       @cmd.push: "--limit-rate={$.limit-rate}";
     }
-    @cmd.push: "'{$url}'", '-O', "'{$.download-dir}/{$file-name}'";
-    shell( @cmd.join: ' ' );
+    @cmd.push: $url, '-O', "{$.download-dir}/{$file-name}";
+    run( @cmd );
   }
 
   method download-process-exists( Str $url ) returns Bool {
@@ -110,6 +110,8 @@ class Wget-Download does Download is export {
     if ( $out ~~ m:i/content\-length\s*\:\s*(\d+)/ ) {
       %ret<size-bytes> = $/[0].Int;
     }
+    # NB: The following may in theory be used for shell injection attack but
+    # is handled by using run() instead of shell() in self.start-download() .
     if ( $out ~~ m:i/content\-disposition\s*\:.+?filename\=\"(.+?)\"/ ) {
       %ret<file-name> = $/[0].Str;
     }
@@ -131,15 +133,15 @@ class YT-DL-Download does Download is export {
   has $!format-id;
 
   method start-download( $url, $file-name ) {
-    my @cmd = ( '/usr/bin/screen', '-d -m', $.youtube-dl );
+    my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl );
     if ( $.limit-rate ) {
-      @cmd.push: '-r', "{$.limit-rate}";
+      @cmd.push: '-r', $.limit-rate;
     }
     if ( $!format-id ) {
-      @cmd.push: '-f', "{$!format-id}";
+      @cmd.push: '-f', $!format-id;
     }
-    @cmd.push: "'{$url}'";
-    shell( @cmd.join: ' ' );
+    @cmd.push: $url;
+    run( @cmd );
   }
 
   method download-process-exists( Str $url ) returns Bool {
@@ -176,6 +178,12 @@ class YT-DL-Download does Download is export {
       my $json = from-json( $json-file-name.IO.slurp );
 
       # Find format with definite file size and 720p resolution
+      # NB: youtube-dl names the file with .part suffix while downloading and
+      # renames it into target only after completion. So Dispatcher is not able
+      # to identify abandoned download by seeing incomplete file. It will just
+      # start youtube-dl with normal command which continues incomplete .part
+      # file by default. But both 'file-name' and 'size-bytes' attributes are
+      # required to identify the file is complete and doesn't need restart.
       for |$json<formats> -> $fmt {
         if ( $fmt<format_note> eq '720p' && $fmt<filesize> ) {
           %ret<file-name> = $json-file-name;
