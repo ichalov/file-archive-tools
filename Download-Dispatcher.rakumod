@@ -29,6 +29,8 @@ $d.main();
 
 =item Run only within certain timespan each day
 =item Additional options for `wget`
+=item Try to implement merge of two formats in YT-DL-Download for better quality
+and predictable output file size
 
 =head2 AUTHOR
 
@@ -224,7 +226,12 @@ class YT-DL-Download does Download is export {
           $audio-size = $fmt<filesize>;
         }
       }
-      %ret<size-bytes> = $compound-size || $video-size + $audio-size;
+      # The estimated file size in case of merge tends to be slightly more than
+      # actual, reduce it by 5% to avoid looping at the end of download (but
+      # that would also prevent re-starts of almost completed partial downloads)
+      %ret<size-bytes> = $compound-size
+                         ||
+                         ( ( $video-size + $audio-size ) * 0.95 ).round
     }
     if ( $json-file-name && $json-file-name.IO.f ) {
       $json-file-name.IO.unlink;
