@@ -133,13 +133,15 @@ class YT-DL-Download does Download is export {
   has $!format-id;
 
   method start-download( $url, $file-name ) {
-    my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl );
+    my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl, '--no-call-home' );
     if ( $.limit-rate ) {
       @cmd.push: '-r', $.limit-rate;
     }
-    if ( $!format-id ) {
-      @cmd.push: '-f', $!format-id;
-    }
+    # Don't use format_id because it prevents merge (the output won't have audio
+    # stream included).
+#    if ( $!format-id ) {
+#      @cmd.push: '-f', $!format-id;
+#    }
     @cmd.push: $url;
     run( @cmd );
   }
@@ -166,7 +168,8 @@ class YT-DL-Download does Download is export {
     }
 
     my $proc = run(
-      $.youtube-dl, '--write-info-json', '--skip-download', $url, :out
+      $.youtube-dl, '--no-call-home', '--write-info-json', '--skip-download',
+      $url, :out
     );
     my $out = $proc.out.slurp;
     my %ret = Empty;
@@ -177,21 +180,51 @@ class YT-DL-Download does Download is export {
       $json-file-name = $/[0].Str;
       my $json = from-json( $json-file-name.IO.slurp );
 
-      # Find format with definite file size and 720p resolution
+      # Calculate approximate resulting file size as the sum of last sized 720p
+      # video and audio with acodec as in header. If the video of choice has
+      # both vcodec and acodec, then take its size without adding audio.
       # NB: youtube-dl names the file with .part suffix while downloading and
       # renames it into target only after completion. So Dispatcher is not able
       # to identify abandoned download by seeing incomplete file. It will just
       # start youtube-dl with normal command which continues incomplete .part
       # file by default. But both 'file-name' and 'size-bytes' attributes are
       # required to identify the file is complete and doesn't need restart.
+      # TODO: Need a more reliable means of getting the resulting file size
+      # before it's downloaded.
+      my ( $video-size, $audio-size, $compound-size ) = 0, 0, 0;
+      sub set-ret ( Hash $fmt ) {
+        %ret<file-name> = $json-file-name;
+        %ret<file-name> ~~ s:i/\.info\.json\s*$/.$fmt<ext>/;
+        $!format-id = $fmt<format_id>;
+      }
       for |$json<formats> -> $fmt {
-        if ( $fmt<format_note> eq '720p' && $fmt<filesize> ) {
-          %ret<file-name> = $json-file-name;
-          %ret<file-name> ~~ s:i/\.info\.json\s*$/.$fmt<ext>/;
-          %ret<size-bytes> = $fmt<filesize>;
-          $!format-id = $fmt<format_id>;
+        if (
+          $fmt<vcodec> eq $json<vcodec> && $fmt<acodec> eq $json<acodec>
+          &&
+          $fmt<filesize> && $fmt<filesize> > $compound-size
+        ) {
+          $compound-size = $fmt<filesize>;
+          set-ret( $fmt );
+        }
+        if (
+          $fmt<format_note> eq '720p' && $fmt<acodec> eq 'none'
+          &&
+          $fmt<filesize>
+        ) {
+          $video-size = $fmt<filesize>;
+          unless ( $compound-size ) {
+            set-ret( $fmt );
+          }
+        }
+        if (
+          $fmt<acodec> eq $json<acodec> && $fmt<vcodec> eq 'none'
+          &&
+          $fmt<filesize> && $fmt<filesize> > $audio-size
+        ) {
+          $audio-size = $fmt<filesize>;
         }
       }
+      %ret<size-bytes> = $compound-size || $video-size + $audio-size;
     }
     if ( $json-file-name && $json-file-name.IO.f ) {
       $json-file-name.IO.unlink;
