@@ -132,18 +132,11 @@ class YT-DL-Download does Download is export {
 
   has $.youtube-dl = '/usr/bin/youtube-dl';
 
-  has $!format-id;
-
   method start-download( $url, $file-name ) {
     my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl, '--no-call-home' );
     if ( $.limit-rate ) {
       @cmd.push: '-r', $.limit-rate;
     }
-    # Don't use format_id because it prevents merge (the output won't have audio
-    # stream included).
-#    if ( $!format-id ) {
-#      @cmd.push: '-f', $!format-id;
-#    }
     @cmd.push: $url;
     run( @cmd );
   }
@@ -182,56 +175,28 @@ class YT-DL-Download does Download is export {
       $json-file-name = $/[0].Str;
       my $json = from-json( $json-file-name.IO.slurp );
 
-      # Calculate approximate resulting file size as the sum of last sized 720p
-      # video and audio with acodec as in header. If the video of choice has
-      # both vcodec and acodec, then take its size without adding audio.
       # NB: youtube-dl names the file with .part suffix while downloading and
       # renames it into target only after completion. So Dispatcher is not able
       # to identify abandoned download by seeing incomplete file. It will just
       # start youtube-dl with normal command which continues incomplete .part
-      # file by default. But both 'file-name' and 'size-bytes' attributes are
-      # required to identify the file is complete and doesn't need restart.
-      # TODO: Need a more reliable means of getting the resulting file size
-      # before it's downloaded.
-      my ( $video-size, $audio-size, $compound-size ) = 0, 0, 0;
-      sub set-ret ( Hash $fmt ) {
-        %ret<file-name> = $json-file-name;
-        %ret<file-name> ~~ s:i/\.info\.json\s*$/.$fmt<ext>/;
-        $!format-id = $fmt<format_id>;
-      }
+      # file by default. The size is difficult to calculate and can be set to
+      # zero because Dispatcher can identify the download completion by
+      # appearance of the target file without .part suffix in the download
+      # directory.
+      my $ext;
       for |$json<formats> -> $fmt {
-        if (
-          $fmt<vcodec> eq $json<vcodec> && $fmt<acodec> eq $json<acodec>
-          &&
-          $fmt<filesize> && $fmt<filesize> > $compound-size
-        ) {
-          $compound-size = $fmt<filesize>;
-          set-ret( $fmt );
-        }
-        if (
-          $fmt<format_note> eq '720p' && $fmt<acodec> eq 'none'
-          &&
-          $fmt<filesize>
-        ) {
-          $video-size = $fmt<filesize>;
-          unless ( $compound-size ) {
-            set-ret( $fmt );
-          }
-        }
-        if (
-          $fmt<acodec> eq $json<acodec> && $fmt<vcodec> eq 'none'
-          &&
-          $fmt<filesize> && $fmt<filesize> > $audio-size
-        ) {
-          $audio-size = $fmt<filesize>;
+        if ( $fmt<format_id> eq $json<format_id> ) {
+          $ext = $fmt<ext>;
         }
       }
-      # The estimated file size in case of merge tends to be slightly more than
-      # actual, reduce it by 5% to avoid looping at the end of download (but
-      # that would also prevent re-starts of almost completed partial downloads)
-      %ret<size-bytes> = $compound-size
-                         ||
-                         ( ( $video-size + $audio-size ) * 0.95 ).round
+      if ( $ext ) {
+        %ret<file-name> = $json-file-name;
+        %ret<file-name> ~~ s:i/\.info\.json\s*$/.$ext/;
+      }
+      else {
+        %ret<file-name> = '';
+      }
+      %ret<size-bytes> = 0;
     }
     if ( $json-file-name && $json-file-name.IO.f ) {
       $json-file-name.IO.unlink;
@@ -259,8 +224,10 @@ class Dispatcher is export {
     if ( @cur ) {
       self.check-restart-download( @cur[0], @cur[1].Int );
     }
-    elsif ( my $url = self.next-download() ) {
-      self.schedule-download( $url );
+    else {
+      while ( my $url = self.next-download() ) {
+        last if ( self.schedule-download( $url ) );
+      }
     }
   }
 
@@ -301,34 +268,42 @@ class Dispatcher is export {
     return;
   }
 
-  method schedule-download( Str $url0 ) {
+  method schedule-download( Str $url0 ) returns Bool {
     my $url = %.url-converters<url>( $url0 );
 
-    my $target-size = $.d.get-file-params-cached( $url )<size-bytes>;
+    my %file-params = $.d.get-file-params-cached( $url );
+    my $target-size = %file-params<size-bytes>;
 
     my $fn0 = self.control-file( 'work-queue' );
     my $fn = self.control-file( 'downloading' );
 
     if ( ! $fn0.IO.e ) {
       self.post-error-message( "Can't find file {$fn0}" );
-      return;
+      return False;
     }
 
     if ( $fn.IO.e && self.get-current-download() ) {
       self.post-error-message( "{$fn} is not empty" );
-      return;
+      return False;
     }
-
-    # TODO: Maybe start download immediately and don't wait for
-    # check-restart-download()
-
-    spurt $fn, "{$url0}\t{$target-size}\n";
 
     # TODO: Maybe need a more robust solution for removing lines from source
     my @lines = $fn0.IO.lines.grep( { ! /$url0/ } );
     spurt $fn0, @lines.join("\n") ~ "\n";
 
+    if ( ! %file-params<file-name> && ! %.url-converters<file-name>( $url0 ) ) {
+      say "Can't derive file name for {$url0} - skipping";
+      return False;
+    }
+
+    spurt $fn, "{$url0}\t{$target-size}\n";
+
+    # TODO: Maybe start download immediately and don't wait for
+    # check-restart-download()
+
     self.post-log-message( "Scheduled {$url0} for download" );
+
+    return True;
   }
 
   method get-current-download() {
@@ -419,4 +394,3 @@ class Dispatcher is export {
     die $msg;
   }
 }
-
