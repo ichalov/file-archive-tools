@@ -27,7 +27,6 @@ $d.main();
 
 =head2 TODO
 
-=item Run only within certain timespan each day
 =item Additional options for `wget`
 =item Try to implement merge of two formats in YT-DL-Download for better quality
 and predictable output file size
@@ -57,12 +56,19 @@ role Download is export {
     die "Abstract method called";
   }
 
-  method download-process-exists( Str $url ) returns Bool {
+  method download-process-exists( Str $url ) returns Int {
     die "Abstract method called";
   }
 
   method get-file-params( Str $url ) returns Hash {
     die "Abstract method called";
+  }
+
+  method stop-download( $url ) {
+    if ( my $pid = self.download-process-exists( $url ) ) {
+      say "Killing pid: {$pid}";
+      run( '/bin/kill', '-9', $pid );
+    }
   }
 
   method get-file-params-cached( Str $url ) returns Hash {
@@ -93,14 +99,16 @@ class Wget-Download does Download is export {
     run( @cmd );
   }
 
-  method download-process-exists( Str $url ) returns Bool {
+  method download-process-exists( Str $url ) returns Int {
     my $proc = run( '/bin/ps', 'auxww', :out );
     my $out = $proc.out.slurp;
 
-    if ( $out ~~ m:i/ \W wget \W .+? $url / ) {
-      return True;
+    if ( $out ~~ m:i/
+      ^^ \s* \w+ \s+ (\d+) \N+? <!after screen\N+> \W wget \W .+? $url
+    / ) {
+      return $/[0].Int;
     }
-    return False;
+    return 0;
   }
 
   method get-file-params( Str $url ) returns Hash {
@@ -141,14 +149,16 @@ class YT-DL-Download does Download is export {
     run( @cmd );
   }
 
-  method download-process-exists( Str $url ) returns Bool {
+  method download-process-exists( Str $url ) returns Int {
     my $proc = run( '/bin/ps', 'auxww', :out );
     my $out = $proc.out.slurp;
 
-    if ( $out ~~ m:i/ \W youtube\-dl \W .+? $url / ) {
-      return True;
+    if ( $out ~~ m:i/
+      ^^ \s* \w+ \s+ (\d+) \N+? <!after screen\N+> \W youtube\-dl \W .+? $url
+    / ) {
+      return $/[0].Int;
     }
-    return False;
+    return 0;
   }
 
   method get-file-params( Str $url ) returns Hash {
@@ -217,6 +227,11 @@ class Dispatcher is export {
   );
 
   has Download $.d is rw;
+
+  # Redefining this subroutine allows to make dispatcher stop downloads at
+  # certain time of day or depending on external process presence.
+  # NB: It depends on 'kill' system utility.
+  has Code $.download-allowed is rw = sub { return True; }
 
   method main() {
     self.copy-from-incoming();
@@ -330,6 +345,11 @@ class Dispatcher is export {
                  // %.url-converters<file-name>( $url0 );
 
     if ( ! $.d.download-process-exists( $url ) ) {
+      if ( ! $.download-allowed.() ) {
+        self.post-log-message( "Not starting download of {$url0} because of "
+                             ~ "schedule restriction in download-allowed()" );
+        return;
+      }
       my $target_fn = $.d.download-dir ~ '/' ~ $file-name;
       if ( $target_fn.IO.e ) {
         my $d_size = $target_fn.IO.s;
@@ -355,7 +375,14 @@ class Dispatcher is export {
       }
     }
     else {
-      self.post-log-message( "URL download underway: {$url0}" );
+      if ( $.download-allowed.() ) {
+        self.post-log-message( "URL download underway: {$url0}" );
+      }
+      else {
+        self.post-log-message( "Stopping download due to schedule restriction "
+                             ~ "in download-allowed(): {$url0}" );
+        $.d.stop-download( $url );
+      }
     }
   }
 
