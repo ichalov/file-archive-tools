@@ -88,6 +88,11 @@ role Download is export {
       return %file-params;
     }
   }
+
+  method process-exists-regex( Str $cmd, Str $url ) returns Regex {
+    return
+      rx:i{ ^^ \s* \w+ \s+ (\d+) \N+? <!after screen\N+> \W $cmd \W .+? $url };
+  }
 }
 
 # NB: depends on wget, screen and ps.
@@ -110,9 +115,7 @@ class Wget-Download does Download is export {
     my $proc = run( '/bin/ps', 'auxww', :out );
     my $out = $proc.out.slurp;
 
-    if ( $out ~~ m:i/
-      ^^ \s* \w+ \s+ (\d+) \N+? <!after screen\N+> \W wget \W .+? $url
-    / ) {
+    if ( $out ~~ self.process-exists-regex( 'wget', $url ) ) {
       return $/[0].Int;
     }
     return 0;
@@ -160,9 +163,7 @@ class YT-DL-Download does Download is export {
     my $proc = run( '/bin/ps', 'auxww', :out );
     my $out = $proc.out.slurp;
 
-    if ( $out ~~ m:i/
-      ^^ \s* \w+ \s+ (\d+) \N+? <!after screen\N+> \W youtube\-dl \W .+? $url
-    / ) {
+    if ( $out ~~ self.process-exists-regex( 'youtube-dl', $url ) ) {
       return $/[0].Int;
     }
     return 0;
