@@ -21,6 +21,10 @@ $d.url-converters<file-name> = {
   # subsequent ? or end of string
   my $u = @_[0]; my $m = $u ~~ m/ ^ .+ \/ (.+?) (\?|$) /; '' ~ $m[0];
 }
+$d.download-allowed = sub {
+ my $h = DateTime.now.hour;
+ return ( $h >= 2 && $h < 8 );
+}
 
 $d.main();
 =end code
@@ -30,6 +34,9 @@ $d.main();
 =item Additional options for `wget`
 =item Try to implement merge of two formats in YT-DL-Download for better quality
 and predictable output file size
+=item Explore creating a wrapper over `wget` that renames file into target upon
+successful completion similarly to `youtube-dl`. The script could be simplified
+by removing file size tracking in this case.
 
 =head2 AUTHOR
 
