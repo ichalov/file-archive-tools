@@ -11,7 +11,7 @@ use lib <.>;
 use Download-Dispatcher;
 
 my $dl = Wget-Download.new: :limit-rate(160000) :download-dir('.');
-my $d = Dispatcher.new :d($dl) :dispatcher-dir('.');
+my $d = Dispatcher.new :downloader($dl) :dispatcher-dir('.');
 
 $d.url-converters<url> = {
   my $u = @_[0]; $u ~~ s/ \? .+ $ //; $u ~ '';
@@ -235,6 +235,12 @@ class Dispatcher is export {
   );
 
   has Download $.d is rw;
+
+  submethod TWEAK ( Download :$downloader ) {
+    # A longer alias for $.d allows to clarify meaning in constructor but still
+    # use shorter attribute name inside the class
+    self.d //= $downloader;
+  }
 
   # Redefining this subroutine allows to make dispatcher stop downloads at
   # certain time of day or depending on external process presence.
