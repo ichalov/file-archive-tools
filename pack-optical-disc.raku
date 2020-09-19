@@ -45,7 +45,7 @@ my %file-sets = Empty;
 # Global storages for a speedup feature that shortcuts file combinations that
 # are a different ordering of already checked but with fixed lead of the size
 # no less than the second biggest container.
-my $cur-limit;
+my $cur-limit = -1;
 my $base-at-limit;
 my %visited-combinations;
 
