@@ -358,6 +358,8 @@ class Dispatcher is export {
     my $file-name = $.d.get-file-params-cached( $url )<file-name>
                  // %.url-converters<file-name>( $url0 );
 
+    enum StartType < start restart >;
+    my StartType $start-needed;
     if ( ! $.d.download-process-exists( $url ) ) {
       if ( ! $.download-allowed.() ) {
         self.post-log-message( "Not starting download of {$url0} because of "
@@ -379,13 +381,11 @@ class Dispatcher is export {
           self.finalize-download( $url0 );
         }
         else {
-          self.post-log-message( "Restarted incomplete URL download: {$url0}" );
-          $.d.start-download( $url, $file-name );
+          $start-needed = restart;
         }
       }
       else {
-        self.post-log-message( "Start missing URL download: {$url0}" );
-        $.d.start-download( $url, $file-name );
+        $start-needed = start;
       }
     }
     else {
@@ -396,6 +396,25 @@ class Dispatcher is export {
         self.post-log-message( "Stopping download due to schedule restriction "
                              ~ "in download-allowed(): {$url0}" );
         $.d.stop-download( $url );
+      }
+    }
+    # NB: One of enum vals evaluates to 0 so need to check for definedness
+    if ( ( $start-needed // -1 ) !== -1 ) {
+      # Additional protection against calling $.d.start-download() without
+      # posting a message in logs.
+      my Bool $start-flag = False;
+      given $start-needed {
+        when .Str eq 'start' {
+          self.post-log-message( "Started new URL download: {$url0}" );
+          $start-flag = True;
+        }
+        when .Str eq 'restart' {
+          self.post-log-message( "Restarted incomplete URL download: {$url0}" );
+          $start-flag = True;
+        }
+      }
+      if ( $start-flag ) {
+        $.d.start-download( $url, $file-name );
       }
     }
   }
