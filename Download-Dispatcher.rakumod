@@ -50,6 +50,8 @@ my %dispatcher-storage = (
   incoming => 'incoming.txt',
   work-queue => 'download.txt',
   downloading => 'downloading.txt',
+  restart-counts => 'restart-counts.txt',
+  failed => 'failed.txt',
   complete => 'complete.txt',
 );
 
@@ -242,6 +244,12 @@ class Dispatcher is export {
     self.d //= $downloader;
   }
 
+  # Number of sequential failures before download gets rescheduled
+  has Int $.failures-before-reschedule = 3;
+
+  # Number of sequential failures before rescheduled download gets abandoned
+  has Int $.failures-before-stop = 5; # i.e. two after reschedule
+
   # Redefining this subroutine allows to make dispatcher stop downloads at
   # certain time of day or depending on external process presence.
   # NB: It depends on 'kill' system utility.
@@ -378,7 +386,7 @@ class Dispatcher is export {
           else {
             self.post-log-message( "URL {$url0} finished." );
           }
-          self.finalize-download( $url0 );
+          self.finish-download( $url0 );
         }
         else {
           $start-needed = restart;
@@ -400,28 +408,55 @@ class Dispatcher is export {
     }
     # NB: One of enum vals evaluates to 0 so need to check for definedness
     if ( ( $start-needed // -1 ) !== -1 ) {
-      # Additional protection against calling $.d.start-download() without
-      # posting a message in logs.
-      my Bool $start-flag = False;
-      given $start-needed {
-        when .Str eq 'start' {
-          self.post-log-message( "Started new URL download: {$url0}" );
-          $start-flag = True;
-        }
+      given self.restart-count-registry( $url ) {
         when .Str eq 'restart' {
-          self.post-log-message( "Restarted incomplete URL download: {$url0}" );
-          $start-flag = True;
+          # Additional protection against calling $.d.start-download() without
+          # posting a message in logs.
+          my Bool $start-flag = False;
+          given $start-needed {
+            when .Str eq 'start' {
+              self.post-log-message( "Started new URL download: {$url0}" );
+              $start-flag = True;
+            }
+            when .Str eq 'restart' {
+              self.post-log-message( "Restarted incomplete URL download: "
+                                   ~ $url0 );
+              $start-flag = True;
+            }
+          }
+          if ( $start-flag ) {
+            $.d.start-download( $url, $file-name );
+          }
         }
-      }
-      if ( $start-flag ) {
-        $.d.start-download( $url, $file-name );
+        when .Str eq 'delay' {
+          self.post-log-message( "Placing faulty download at the end of work "
+                               ~ "queue: {$url0}" );
+          self.finish-download( $url0, :delay(True) );
+        }
+        when .Str eq 'abandon' {
+          self.post-log-message( "Download eventually failed: {$url0}" );
+          self.finish-download( $url0, :failed(True) );
+        }
       }
     }
   }
 
-  method finalize-download( Str $url ) {
+  method finish-download( Str $url, Bool :$failed, Bool :$delay ) {
+
+    if ( $failed && $delay ) {
+      self.post-error-message(
+        Q<Can't use finish-download() with both $failed and $delay params>
+      );
+    }
+
     my $fn0 = self.control-file( 'downloading' );
     my $fn = self.control-file( 'complete' );
+    if ( $failed ) {
+      $fn = self.control-file( 'failed' );
+    }
+    if ( $delay ) {
+      $fn = self.control-file( 'work-queue' );
+    }
 
     if ( ! $fn0.IO.e ) {
       self.post-error-message( "Can't find file {$fn0}" );
@@ -431,6 +466,10 @@ class Dispatcher is export {
     # NB: 'downloading' file only supposed to have only one line
     my $l = $fn0.IO.lines[0];
     if ( $l ~~ m:i/ $url / ) {
+      # Don't copy file size into work queue
+      if ( $delay ) {
+        $l = $url;
+      }
       spurt $fn, $l ~ "\n", :append;
       spurt $fn0, '';
     }
@@ -438,6 +477,13 @@ class Dispatcher is export {
       self.post-error-message( "First line of {$fn0} doesn't contain required "
                              ~ "URL {$url}" );
     }
+  }
+
+  # TODO: This a stub, develop further
+  method restart-count-registry( Str $url ) {
+    my enum Action < restart delay abandon >;
+    my $ret = restart;
+    return $ret;
   }
 
   method control-file ( Str $fid ) {
