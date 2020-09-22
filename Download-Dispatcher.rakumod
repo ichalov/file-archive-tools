@@ -225,6 +225,47 @@ class YT-DL-Download does Download is export {
   }
 }
 
+# NB: Private class, only supposed to be used in Dispatcher for per-URL failure
+# counts
+class StoredStrIntMap {
+
+   has $.storage-file;
+
+   has %map;
+
+   method read() {
+     %map = Empty;
+     return if ! $.storage-file.IO.f;
+     for $.storage-file.IO.lines -> $l {
+       next if $l ~~ m/ ^ \s* '#' /;
+       if ( $l ~~ m/ ^ (.+?) \t (\d+) $ / ) {
+         %map{ $/[0].Str } = $/[1].Int;
+       }
+     }
+   }
+
+   method write() {
+     my $out = '';
+     for %map.kv -> $k, $v {
+       $out ~= "{$k}\t{$v}\n";
+     }
+     spurt $.storage-file, $out;
+   }
+
+   method increment( Str $k ) {
+     self.read();
+     %map{ $k } += 1;
+     self.write();
+     return %map{ $k };
+   }
+
+   method reset( Str $k ) {
+     self.read();
+     %map{ $k }:delete;
+     self.write();
+   }
+}
+
 # NB: main() is the entry point, make other methods private.
 class Dispatcher is export {
 
@@ -248,7 +289,11 @@ class Dispatcher is export {
   has Int $.failures-before-reschedule = 3;
 
   # Number of sequential failures before rescheduled download gets abandoned
-  has Int $.failures-before-stop = 5; # i.e. two after reschedule
+  has Int $.failures-before-stop = 6; # i.e. two after reschedule
+
+  has StoredStrIntMap $failure-counter = StoredStrIntMap.new(
+    :storage-file( self.control-file( 'restart-counts' ) )
+  );
 
   # Redefining this subroutine allows to make dispatcher stop downloads at
   # certain time of day or depending on external process presence.
@@ -387,6 +432,7 @@ class Dispatcher is export {
             self.post-log-message( "URL {$url0} finished." );
           }
           self.finish-download( $url0 );
+          $failure-counter.reset( $url0 );
         }
         else {
           $start-needed = restart;
@@ -399,6 +445,7 @@ class Dispatcher is export {
     else {
       if ( $.download-allowed.() ) {
         self.post-log-message( "URL download underway: {$url0}" );
+        $failure-counter.reset( $url0 );
       }
       else {
         self.post-log-message( "Stopping download due to schedule restriction "
@@ -408,7 +455,7 @@ class Dispatcher is export {
     }
     # NB: One of enum vals evaluates to 0 so need to check for definedness
     if ( ( $start-needed // -1 ) !== -1 ) {
-      given self.restart-count-registry( $url ) {
+      given self.register-restart( $url0 ) {
         when .Str eq 'restart' {
           # Additional protection against calling $.d.start-download() without
           # posting a message in logs.
@@ -436,6 +483,7 @@ class Dispatcher is export {
         when .Str eq 'abandon' {
           self.post-log-message( "Download eventually failed: {$url0}" );
           self.finish-download( $url0, :failed(True) );
+          $failure-counter.reset( $url0 );
         }
       }
     }
@@ -479,10 +527,16 @@ class Dispatcher is export {
     }
   }
 
-  # TODO: This a stub, develop further
-  method restart-count-registry( Str $url ) {
+  method register-restart( Str $url ) {
     my enum Action < restart delay abandon >;
     my $ret = restart;
+    my $c = $failure-counter.increment( $url );
+    if ( $c == $.failures-before-reschedule + 1 ) {
+      $ret = delay;
+    }
+    if ( $c > $.failures-before-stop ) {
+      $ret = abandon;
+    }
     return $ret;
   }
 
