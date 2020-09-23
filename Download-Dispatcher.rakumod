@@ -370,8 +370,8 @@ class Dispatcher is export {
     }
 
     # TODO: Maybe need a more robust solution for removing lines from source
-    my @lines = $fn0.IO.lines.grep( { ! /$url0/ } );
-    spurt $fn0, @lines.join("\n") ~ "\n";
+    my @lines = $fn0.IO.lines.grep( { ! /$url0/ && ! / ^ \s* $ / } );
+    spurt $fn0, @lines.join("\n") ~ ( @lines ?? "\n" !! '' );
 
     if ( ! %file-params<file-name> && ! %.url-converters<file-name>( $url0 ) ) {
       say "Can't derive file name for {$url0} - skipping";
