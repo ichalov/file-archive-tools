@@ -9,7 +9,6 @@
     Feed from `ls -l` instead of live directory
     Get rid of global variables
     Add parallelization
-    Optional low limit on the file size to be included (to improve speed)
 
   Author: Victor Ichalov <ichalov@gmail.com>, 2020
 )
@@ -44,15 +43,18 @@ my %file-sets = Empty;
 
 my $_speedups = False;
 
-sub MAIN ( Str $src-dir, Bool :$speedups ) {
+sub MAIN ( Str $src-dir, Bool :$speedups, Str :$min-size ) {
 
   $_speedups = $speedups;
 
   my $start-time = DateTime.now();
 
+  my $min-size-bytes = $min-size ?? parse-file-size( $min-size ) !! 0;
+
   for $src-dir.IO.dir -> $file {
     state $counter;
     next unless $file.IO.f;
+    next if $file.IO.s < $min-size-bytes;
     %file-names{++$counter} = $file.basename;
     %candidates{$counter} = $file.IO.s;
   }
@@ -132,6 +134,23 @@ sub report-best-combinations( Int $report-items = 10 ) {
 sub get-container-name-from-file-set ( Str $file-set ) {
   my $m = $file-set ~~ m/ ^ (.+?) \| /;
   $m[0];
+}
+
+sub parse-file-size( Str $size ) {
+  if ( $size ~~ m:i/ ^ \s* (\d+) (k|m|g)? \s* $ / ) {
+    my $num = $/[0];
+    my $mult = 0;
+    given $/[1] // '' {
+      when .lc eq 'k' { $mult = 10 }
+      when .lc eq 'm' { $mult = 20 }
+      when .lc eq 'g' { $mult = 30 }
+    }
+    return $num * 2 ** $mult;
+  }
+  else {
+    die "Can't parse file size '{$size}', should be an integer optionally "
+      ~ "followed by K, M or G, e.g.: 300k or 2G or 200000 (bytes)";
+  }
 }
 
 sub format-int( Int $n0 ) {
