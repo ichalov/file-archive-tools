@@ -300,16 +300,28 @@ class Dispatcher is export {
   # NB: It depends on 'kill' system utility.
   has Code $.download-allowed is rw = sub { return True; }
 
+  # If this is set to True then don't wait until next crontab cycle to schedule
+  # next download and start it from schedule immediately as well.
+  has Bool $.take-next-download-wo-delay = True;
+
   method main() {
     self.copy-from-incoming();
+    # NB: The following block of code is also called at the end of
+    # self.schedule-download() in order to make next download start immediately
+    # after just completed.
+    # TODO: Maybe re-make it using a loop around here.
     my @cur = self.get-current-download();
     if ( @cur ) {
       self.check-restart-download( @cur[0], @cur[1].Int );
     }
     else {
-      while ( my $url = self.next-download() ) {
-        last if ( self.schedule-download( $url ) );
-      }
+      self.schedule-next-download();
+    }
+  }
+
+  method schedule-next-download() {
+    while ( my $url = self.next-download() ) {
+      last if ( self.schedule-download( $url ) );
     }
   }
 
@@ -380,10 +392,15 @@ class Dispatcher is export {
 
     spurt $fn, "{$url0}\t{$target-size}\n";
 
-    # TODO: Maybe start download immediately and don't wait for
-    # check-restart-download()
-
     self.post-log-message( "Scheduled {$url0} for download" );
+
+    if ( $.take-next-download-wo-delay ) {
+      # NB: this is a copy-paste from self.main()
+      my @cur = self.get-current-download();
+      if ( @cur ) {
+        self.check-restart-download( @cur[0], @cur[1].Int );
+      }
+    }
 
     return True;
   }
@@ -524,6 +541,10 @@ class Dispatcher is export {
     else {
       self.post-error-message( "First line of {$fn0} doesn't contain required "
                              ~ "URL {$url}" );
+    }
+
+    if ( $.take-next-download-wo-delay ) {
+      self.schedule-next-download();
     }
   }
 
