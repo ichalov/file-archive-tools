@@ -7,7 +7,6 @@
     Progress bar during calculation
     Output correspondent mkisofs commands
     Feed from `ls -l` instead of live directory
-    Get rid of global variables
     Add parallelization
 
   Author: Victor Ichalov <ichalov@gmail.com>, 2020
@@ -35,50 +34,52 @@ sub USAGE() {
   say $script-description;
 }
 
-
-# Global storages for file lists
-my %candidates = Empty;
-my %file-names = Empty;
-my %file-sets = Empty;
-
-my $_speedups = False;
-
 sub MAIN ( Str $src-dir, Bool :$speedups, Str :$min-size ) {
-
-  $_speedups = $speedups;
 
   my $start-time = DateTime.now();
 
   my $min-size-bytes = $min-size ?? parse-file-size( $min-size ) !! 0;
 
+  my %files = Empty;
+
   for $src-dir.IO.dir -> $file {
     state $counter;
     next unless $file.IO.f;
     next if $file.IO.s < $min-size-bytes;
-    %file-names{++$counter} = $file.basename;
-    %candidates{$counter} = $file.IO.s;
+    %files{++$counter} = %( name => $file.basename, size => $file.IO.s );
   }
 
-  # order the initial @tail as larger files first
-  my @init-tail = %candidates.keys.sort:
-                    { %candidates{$^b} <=> %candidates{$^a} };
+  my %file-sets = calculate-combination-sizes( %files, speedups => $speedups );
 
-  # DIAG
-#  say @init-tail.map({$^a ~ ' ' ~ %file-names{$^a}}).gist;
-#  exit;
-
-  check-combination( Empty, @init-tail, 0 );
-
-  report-best-combinations();
+  report-best-combinations( %file-sets, %files );
 
   say ( DateTime.now() - $start-time ).round(0.1) ~ ' seconds elapsed';
 }
 
-# NB: This recursive function relies on global %candidates and
-# %container-size-limits, writes in %file-sets.
-sub check-combination( @base, @tail, $base-size ) {
-  TAIL: for @tail -> $base-add {
-    my $new-size = $base-size + %candidates{$base-add};
+sub calculate-combination-sizes( %files, *%options ) {
+
+  my $speedups = %options<speedups>;
+
+  my %file-sets = Empty;
+
+  # order the initial combination as larger files first
+  my @init = %files.keys.sort: { %files{$^b}<size> <=> %files{$^a}<size> };
+
+  my @combination-stack = Empty;
+  @combination-stack.push: %(
+    base => Empty,
+    tail => @init,
+    base-size => 0,
+  );
+
+  while ( @combination-stack && my %item = @combination-stack.shift ) {
+   # TODO: Find a better method of storing items in stack (e.g. w/o using .flat)
+   my @base = %item<base>.flat;
+   my @tail = %item<tail>.flat;
+   my $base-size = %item<base-size>;
+
+   TAIL: for @tail -> $base-add {
+    my $new-size = $base-size + %files{$base-add}<size>;
     for %container-size-limits.keys
           .sort({%container-size-limits{$^a}})
         -> $disc
@@ -92,7 +93,7 @@ sub check-combination( @base, @tail, $base-size ) {
         # Don't check any further combinations if the current $limit is achieved
         # with more than 2 files. Only make this shortcut if --speedups option
         # is specified.
-        if ( $_speedups && @base.elems >= 2 ) {
+        if ( $speedups && @base.elems >= 2 ) {
           next TAIL;
         }
       }
@@ -105,12 +106,19 @@ sub check-combination( @base, @tail, $base-size ) {
     }
 
     my @next-tail = @tail.grep: { $_ != $base-add };
-    check-combination( ( @base, $base-add ).flat, @next-tail, $new-size );
+    @combination-stack.push: %(
+      base => ( @base, $base-add ).flat,
+      tail => @next-tail,
+      base-size => $new-size,
+    );
+   }
   }
+
+  return %file-sets;
 }
 
 # NB: reads from global %file-sets, prints on STDOUT
-sub report-best-combinations( Int $report-items = 10 ) {
+sub report-best-combinations( %file-sets, %files, Int $report-items = 10 ) {
   for
     %file-sets.keys.sort:
       {
@@ -124,7 +132,7 @@ sub report-best-combinations( Int $report-items = 10 ) {
     my $container-size =
       %container-size-limits{ get-container-name-from-file-set( $file-set ) };
     put $file-set.split('|')
-          .map({%file-names{$_} ?? '  ' ~ %file-names{$_} !! $_}).join("\n"),
+          .map({%files{$_}<name> ?? '  ' ~ %files{$_}<name> !! $_}).join("\n"),
         "\n = ", format-int( %file-sets{$file-set} ), ' (',
         format-int( $container-size - %file-sets{$file-set} ), " remaining)\n";
     last if (++$count > $report-items);
