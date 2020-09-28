@@ -66,17 +66,14 @@ sub calculate-combination-sizes( %files, *%options ) {
   my @init = %files.keys.sort: { %files{$^b}<size> <=> %files{$^a}<size> };
 
   my @combination-stack = Empty;
-  @combination-stack.push: %(
-    base => Empty,
-    tail => @init,
-    base-size => 0,
-  );
+  @combination-stack.push: [ (), @init, 0 ];
 
-  while ( @combination-stack && my %item = @combination-stack.shift ) {
+  my $stack-pos = 0;
+  while ( my $item = @combination-stack[ $stack-pos++ ] // False ) {
    # TODO: Find a better method of storing items in stack (e.g. w/o using .flat)
-   my @base = %item<base>.flat;
-   my @tail = %item<tail>.flat;
-   my $base-size = %item<base-size>;
+   my @base = $item[0].flat;
+   my @tail = $item[1].flat;
+   my $base-size = $item[2];
 
    TAIL: for @tail -> $base-add {
     my $new-size = $base-size + %files{$base-add}<size>;
@@ -106,11 +103,7 @@ sub calculate-combination-sizes( %files, *%options ) {
     }
 
     my @next-tail = @tail.grep: { $_ != $base-add };
-    @combination-stack.push: %(
-      base => ( @base, $base-add ).flat,
-      tail => @next-tail,
-      base-size => $new-size,
-    );
+    @combination-stack.push: [ ( @base, $base-add ).flat, @next-tail, $new-size ];
    }
   }
 
