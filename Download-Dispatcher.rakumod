@@ -304,6 +304,10 @@ class Dispatcher is export {
   # next download and start it from schedule immediately as well.
   has Bool $.take-next-download-wo-delay = True;
 
+  has Code $.download-fault-notifier is rw = sub ( Str $msg ) {
+    say( "DOWNLOAD FAULT NOTIFICATION: {$msg}" );
+  }
+
   method main() {
     self.copy-from-incoming();
     # NB: The following block of code is also called at the end of
@@ -499,6 +503,7 @@ class Dispatcher is export {
         }
         when .Str eq 'abandon' {
           self.post-log-message( "Download eventually failed: {$url0}" );
+          $.download-fault-notifier.( "Download failed: {$url0}" );
           self.finish-download( $url0, :failed(True) );
           $failure-counter.reset( $url0 );
         }
