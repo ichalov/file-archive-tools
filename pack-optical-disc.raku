@@ -40,30 +40,37 @@ sub MAIN ( Str $src-dir, Bool :$speedups, Str :$min-size ) {
 
   my $min-size-bytes = $min-size ?? parse-file-size( $min-size ) !! 0;
 
-  my %files = Empty;
+  my @file-names = Empty;
+  my @file-sizes = Empty;
 
+  # TODO: Perform check that number of files fits into native type. Or implement
+  # automatic choice of the type.
+  my int8 $counter = 0;
   for $src-dir.IO.dir -> $file {
-    state $counter;
     next unless $file.IO.f;
     next if $file.IO.s < $min-size-bytes;
-    %files{++$counter} = %( name => $file.basename, size => $file.IO.s );
+    @file-names[++$counter] = $file.basename;
+    @file-sizes[$counter] = $file.IO.s;
   }
 
-  my %file-sets = calculate-combination-sizes( %files, speedups => $speedups );
+  my %file-sets = calculate-combination-sizes(
+    @file-names, @file-sizes, speedups => $speedups
+  );
 
-  report-best-combinations( %file-sets, %files );
+  report-best-combinations( %file-sets, @file-names );
 
   say ( DateTime.now() - $start-time ).round(0.1) ~ ' seconds elapsed';
 }
 
-sub calculate-combination-sizes( %files, *%options ) {
+sub calculate-combination-sizes( @file-names, @file-sizes, *%options ) {
 
   my $speedups = %options<speedups>;
 
   my %file-sets = Empty;
 
   # order the initial combination as larger files first
-  my @init = %files.keys.sort: { %files{$^b}<size> <=> %files{$^a}<size> };
+  my @init = @file-names.keys.grep({ $_ })
+    .sort: { @file-sizes[$^b] <=> @file-sizes[$^a] };
 
   my @combination-stack = Empty;
   @combination-stack.push: [ (), @init, 0 ];
@@ -76,7 +83,7 @@ sub calculate-combination-sizes( %files, *%options ) {
    my $base-size = $item[2];
 
    TAIL: for @tail -> $base-add {
-    my $new-size = $base-size + %files{$base-add}<size>;
+    my $new-size = $base-size + @file-sizes[$base-add];
     for %container-size-limits.keys
           .sort({%container-size-limits{$^a}})
         -> $disc
@@ -111,7 +118,7 @@ sub calculate-combination-sizes( %files, *%options ) {
 }
 
 # NB: reads from global %file-sets, prints on STDOUT
-sub report-best-combinations( %file-sets, %files, Int $report-items = 10 ) {
+sub report-best-combinations( %file-sets, @file-names, Int $report-items = 10 ) {
   for
     %file-sets.keys.sort:
       {
@@ -125,7 +132,8 @@ sub report-best-combinations( %file-sets, %files, Int $report-items = 10 ) {
     my $container-size =
       %container-size-limits{ get-container-name-from-file-set( $file-set ) };
     put $file-set.split('|')
-          .map({%files{$_}<name> ?? '  ' ~ %files{$_}<name> !! $_}).join("\n"),
+          .map({ $_.Numeric !~~ Failure ?? '  ' ~ @file-names[$_] !! $_})
+          .join("\n"),
         "\n = ", format-int( %file-sets{$file-set} ), ' (',
         format-int( $container-size - %file-sets{$file-set} ), " remaining)\n";
     last if (++$count > $report-items);
