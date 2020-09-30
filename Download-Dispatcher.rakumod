@@ -430,16 +430,17 @@ class Dispatcher is export {
     enum StartType < start restart >;
     my StartType $start-needed;
     if ( ! $.d.download-process-exists( $url ) ) {
-      # NB: It's important to have consistent file name over time, so either
-      # get it from downloader or calculate from URL.
-      my $file-name = $.d.get-file-params-cached( $url )<file-name>
-                   // %.url-converters<file-name>( $url0 );
-
       if ( ! $.download-allowed.() ) {
         self.post-log-message( "Not starting download of {$url0} because of "
                              ~ "schedule restriction in download-allowed()" );
         return;
       }
+
+      # NB: It's important to have consistent file name over time, so either
+      # get it from downloader or calculate from URL.
+      my $file-name = $.d.get-file-params-cached( $url )<file-name>
+                   // %.url-converters<file-name>( $url0 );
+
       my $target_fn = $.d.download-dir ~ '/' ~ $file-name;
       if ( $target_fn.IO.e ) {
         my $d_size = $target_fn.IO.s;
