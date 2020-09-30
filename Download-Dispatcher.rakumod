@@ -441,8 +441,12 @@ class Dispatcher is export {
       my $file-name = $.d.get-file-params-cached( $url )<file-name>
                    // %.url-converters<file-name>( $url0 );
 
+      unless ( $file-name ) {
+        self.post-log-message( "Can't derive target file name for {$url0}" );
+      }
+
       my $target_fn = $.d.download-dir ~ '/' ~ $file-name;
-      if ( $target_fn.IO.e ) {
+      if ( $file-name && $target_fn.IO.e && $target_fn.IO.f ) {
         my $d_size = $target_fn.IO.s;
         if ( $d_size >= $size ) {
           if ( $d_size > $size ) {
