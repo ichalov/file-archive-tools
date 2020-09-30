@@ -37,8 +37,8 @@ sub USAGE() {
 
 
 # Global storages for file lists
-my %candidates = Empty;
-my %file-names = Empty;
+my @file-names = Empty;
+my @file-sizes = Empty;
 my %file-sets = Empty;
 
 my $_speedups = False;
@@ -52,19 +52,19 @@ sub MAIN ( Str $src-dir, Bool :$speedups, Str :$min-size ) {
   my $min-size-bytes = $min-size ?? parse-file-size( $min-size ) !! 0;
 
   for $src-dir.IO.dir -> $file {
-    state $counter;
+    state Int $counter;
     next unless $file.IO.f;
     next if $file.IO.s < $min-size-bytes;
-    %file-names{++$counter} = $file.basename;
-    %candidates{$counter} = $file.IO.s;
+    @file-names[++$counter] = $file.basename;
+    @file-sizes[$counter] = $file.IO.s;
   }
 
   # order the initial @tail as larger files first
-  my @init-tail = %candidates.keys.sort:
-                    { %candidates{$^b} <=> %candidates{$^a} };
+  my @init-tail = @file-names.keys.grep({ $_ })
+                    .sort: { @file-sizes[$^b] <=> @file-sizes[$^a] };
 
   # DIAG
-#  say @init-tail.map({$^a ~ ' ' ~ %file-names{$^a}}).gist;
+#  say @init-tail.map({$^a ~ ' ' ~ @file-names[$^a]}).gist;
 #  exit;
 
   check-combination( Empty, @init-tail, 0 );
@@ -74,11 +74,11 @@ sub MAIN ( Str $src-dir, Bool :$speedups, Str :$min-size ) {
   say ( DateTime.now() - $start-time ).round(0.1) ~ ' seconds elapsed';
 }
 
-# NB: This recursive function relies on global %candidates and
+# NB: This recursive function relies on global @file-sizes and
 # %container-size-limits, writes in %file-sets.
 sub check-combination( @base, @tail, $base-size ) {
   TAIL: for @tail -> $base-add {
-    my $new-size = $base-size + %candidates{$base-add};
+    my $new-size = $base-size + @file-sizes[$base-add];
     for %container-size-limits.keys
           .sort({%container-size-limits{$^a}})
         -> $disc
@@ -87,6 +87,9 @@ sub check-combination( @base, @tail, $base-size ) {
       if ( $base-size <= $limit && $new-size > $limit ) {
 #        say $disc ~ '|' ~ @base.join: '|'; # DIAG
 
+        # TODO: Decrease %file-sets size by filtering out candidates that have
+        # little chance of getting into final report ($limit - $base-size is too
+        # big).
         %file-sets{$disc ~ '|' ~ @base.sort.join: '|'} = $base-size;
 
         # Don't check any further combinations if the current $limit is achieved
@@ -124,7 +127,8 @@ sub report-best-combinations( Int $report-items = 10 ) {
     my $container-size =
       %container-size-limits{ get-container-name-from-file-set( $file-set ) };
     put $file-set.split('|')
-          .map({%file-names{$_} ?? '  ' ~ %file-names{$_} !! $_}).join("\n"),
+          .map({ $_.Numeric !~~ Failure ?? '  ' ~ @file-names[$_] !! $_ })
+          .join("\n"),
         "\n = ", format-int( %file-sets{$file-set} ), ' (',
         format-int( $container-size - %file-sets{$file-set} ), " remaining)\n";
     last if (++$count > $report-items);
