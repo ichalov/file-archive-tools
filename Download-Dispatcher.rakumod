@@ -310,23 +310,22 @@ class Dispatcher is export {
 
   method main() {
     self.copy-from-incoming();
-    # NB: The following block of code is also called at the end of
-    # self.schedule-download() in order to make next download start immediately
-    # after just completed.
-    # TODO: Maybe re-make it using a loop around here.
-    my @cur = self.get-current-download();
-    if ( @cur ) {
-      self.check-restart-download( @cur[0], @cur[1].Int );
-    }
-    else {
-      self.schedule-next-download();
+    loop ( my $i = 0; $i < ( $.take-next-download-wo-delay ?? 3 !! 1 ); $i++ ) {
+      my @cur = self.get-current-download();
+      if ( @cur ) {
+        last unless self.check-restart-download( @cur[0], @cur[1].Int );
+      }
+      else {
+        last unless self.schedule-next-download();
+      }
     }
   }
 
   method schedule-next-download() {
     while ( my $url = self.next-download() ) {
-      last if ( self.schedule-download( $url ) );
+      return True if ( self.schedule-download( $url ) );
     }
+    return False;
   }
 
   method copy-from-incoming() {
@@ -398,14 +397,6 @@ class Dispatcher is export {
 
     self.post-log-message( "Scheduled {$url0} for download" );
 
-    if ( $.take-next-download-wo-delay ) {
-      # NB: this is a copy-paste from self.main()
-      my @cur = self.get-current-download();
-      if ( @cur ) {
-        self.check-restart-download( @cur[0], @cur[1].Int );
-      }
-    }
-
     return True;
   }
 
@@ -423,7 +414,9 @@ class Dispatcher is export {
     return Empty;
   }
 
-  method check-restart-download( Str $url0, Int $size ) {
+  # NB: Returns True if it removed current download because it ended or shows
+  # failures.
+  method check-restart-download( Str $url0, Int $size ) returns Bool {
 
     my $url = %.url-converters<url>( $url0 );
 
@@ -433,7 +426,7 @@ class Dispatcher is export {
       if ( ! $.download-allowed.() ) {
         self.post-log-message( "Not starting download of {$url0} because of "
                              ~ "schedule restriction in download-allowed()" );
-        return;
+        return False;
       }
 
       # NB: It's important to have consistent file name over time, so either
@@ -459,6 +452,7 @@ class Dispatcher is export {
           }
           self.finish-download( $url0 );
           $failure-counter.reset( $url0 );
+          return True;
         }
         else {
           $start-needed = restart;
@@ -493,12 +487,14 @@ class Dispatcher is export {
             self.post-log-message( "Placing faulty download at the end of work "
                                  ~ "queue: {$url0}" );
             self.finish-download( $url0, :delay(True) );
+            return True;
           }
           when .Str eq 'abandon' {
             self.post-log-message( "Download eventually failed: {$url0}" );
             $.download-fault-notifier.( "Download failed: {$url0}" );
             self.finish-download( $url0, :failed(True) );
             $failure-counter.reset( $url0 );
+            return True;
           }
         }
       }
@@ -514,6 +510,7 @@ class Dispatcher is export {
         $.d.stop-download( $url );
       }
     }
+    return False;
   }
 
   method finish-download( Str $url, Bool :$failed, Bool :$delay ) {
@@ -551,10 +548,6 @@ class Dispatcher is export {
     else {
       self.post-error-message( "First line of {$fn0} doesn't contain required "
                              ~ "URL {$url}" );
-    }
-
-    if ( $.take-next-download-wo-delay ) {
-      self.schedule-next-download();
     }
   }
 
