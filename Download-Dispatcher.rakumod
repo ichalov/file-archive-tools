@@ -310,6 +310,14 @@ class Dispatcher is export {
 
   method main() {
     self.copy-from-incoming();
+    # The maximum number of actions that can be executed within one crontab
+    # invocation is three:
+    # 1. Finish previous download in check-restart-download()
+    # 2. schedule-next-download()
+    # 3. Start the scheduled download using check-restart-download() again
+    # Each of them takes a separate crontab invocation unless
+    # $.take-next-download-wo-delay is set (thus causing a time gap between
+    # subsequent downloads).
     loop ( my $i = 0; $i < ( $.take-next-download-wo-delay ?? 3 !! 1 ); $i++ ) {
       my @cur = self.get-current-download();
       if ( @cur ) {
