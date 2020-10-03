@@ -224,7 +224,7 @@ sub delete-file ( Str $fnf, Str $checksum? ) {
   if ( %dir0-checksums && ! $_any-basename ) {
     my $basename = $fnf.IO.basename;
     my Bool $basename-match = False;
-    for %dir0-checksums{ $checksum } -> $file0 {
+    for |%dir0-checksums{ $checksum } -> $file0 {
       if ( $basename eq $file0.IO.basename ) {
         $basename-match = True;
         last;
