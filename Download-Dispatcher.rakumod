@@ -31,12 +31,12 @@ $d.main();
 
 =head2 TODO
 
-=item Additional options for `wget`
-=item Try to implement merge of two formats in YT-DL-Download for better quality
-and predictable output file size
+=item Add protection against missing system utilities (dependencies check).
 =item Explore creating a wrapper over `wget` that renames file into target upon
 successful completion similarly to `youtube-dl`. The script could be simplified
 by removing file size tracking in this case.
+=item Re-test $.take-next-download-wo-delay when no output file name could be
+derived.
 
 =head2 AUTHOR
 
@@ -58,6 +58,8 @@ my %dispatcher-storage = (
 role Download is export {
 
   has $.download-dir is rw = '.';
+
+  has @.additional-command-line-switches = Empty;
 
   has %.file-params-cache = Empty;
 
@@ -109,6 +111,9 @@ class Wget-Download does Download is export {
     if ( $.limit-rate ) {
       @cmd.push: "--limit-rate={$.limit-rate}";
     }
+    if ( @.additional-command-line-switches ) {
+      @cmd.append: @.additional-command-line-switches;
+    }
     @cmd.push: $url, '-O', "{$.download-dir}/{$file-name}";
     run( @cmd );
   }
@@ -152,10 +157,16 @@ class YT-DL-Download does Download is export {
 
   has $.youtube-dl = '/usr/bin/youtube-dl';
 
+  # TODO: Try to derive extension from @.additional-command-line-switches
+  has $.merged-output-extension = 'mkv';
+
   method start-download( $url, $file-name ) {
-    my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl, '--no-call-home' );
+    my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl );
     if ( $.limit-rate ) {
       @cmd.push: '-r', $.limit-rate;
+    }
+    if ( @.additional-command-line-switches ) {
+      @cmd.append: @.additional-command-line-switches;
     }
     @cmd.push: $url;
     run( @cmd );
@@ -183,8 +194,8 @@ class YT-DL-Download does Download is export {
     }
 
     my $proc = run(
-      $.youtube-dl, '--no-call-home', '--write-info-json', '--skip-download',
-      $url, :out
+      $.youtube-dl, |@.additional-command-line-switches,
+      '--write-info-json', '--skip-download', $url, :out
     );
     my $out = $proc.out.slurp;
     my %ret = Empty;
@@ -203,10 +214,16 @@ class YT-DL-Download does Download is export {
       # zero because Dispatcher can identify the download completion by
       # appearance of the target file without .part suffix in the download
       # directory.
+      # Assume extention for merged output (when format_id has + inside).
       my $ext;
-      for |$json<formats> -> $fmt {
-        if ( $fmt<format_id> eq $json<format_id> ) {
-          $ext = $fmt<ext>;
+      if ( $json<format_id> ~~ m/ ^ \d+ \+ \d+ $ / ) {
+        $ext = $.merged-output-extension;
+      }
+      else {
+        for |$json<formats> -> $fmt {
+          if ( $fmt<format_id> eq $json<format_id> ) {
+            $ext = $fmt<ext>;
+          }
         }
       }
       if ( $ext ) {
