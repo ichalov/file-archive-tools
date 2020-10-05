@@ -445,82 +445,17 @@ class Dispatcher is export {
 
     my $url = %.url-converters<url>( $url0 );
 
-    enum StartType < start restart >;
-    my StartType $start-needed;
     if ( ! $.d.download-process-exists( $url ) ) {
-      if ( ! $.download-allowed.() ) {
-        self.post-log-message( "Not starting download of {$url0} because of "
-                             ~ "schedule restriction in download-allowed()" );
-        return False;
+      my %download-status = self.check-download( $url0, $url, $size );
+      if %download-status<finished>:exists {
+        return %download-status<finished>;
       }
-
-      # NB: It's important to have consistent file name over time, so either
-      # get it from downloader or calculate from URL.
-      my $file-name = $.d.get-file-params-cached( $url )<file-name>
-                   // %.url-converters<file-name>( $url0 );
-
-      unless ( $file-name ) {
-        self.post-log-message( "Can't derive target file name for {$url0}" );
-      }
-
-      my $target_fn = $.d.download-dir ~ '/' ~ $file-name;
-      if ( $file-name && $target_fn.IO.e && $target_fn.IO.f ) {
-        my $d_size = $target_fn.IO.s;
-        if ( $d_size >= $size ) {
-          if ( $d_size > $size ) {
-            self.post-log-message( "URL {$url0} download size exceeds estimate "
-                                 ~ "({$d_size} vs. {$size}). Stopped "
-                                 ~ "downloading." );
-          }
-          else {
-            self.post-log-message( "URL {$url0} finished." );
-          }
-          self.finish-download( $url0 );
-          $failure-counter.reset( $url0 );
-          return True;
-        }
-        else {
-          $start-needed = restart;
-        }
-      }
-      else {
-        $start-needed = start;
-      }
-      # NB: One of enum vals evaluates to 0 so need to check for definedness
+      my $start-needed = %download-status<start-needed>;
       if ( ( $start-needed // -1 ) !== -1 ) {
-        given self.register-restart( $url0 ) {
-          when .Str eq 'restart' {
-            # Additional protection against calling $.d.start-download() without
-            # posting a message in logs.
-            my Bool $start-flag = False;
-            given $start-needed {
-              when .Str eq 'start' {
-                self.post-log-message( "Started new URL download: {$url0}" );
-                $start-flag = True;
-              }
-              when .Str eq 'restart' {
-                self.post-log-message( "Restarted incomplete URL download: "
-                                     ~ $url0 );
-                $start-flag = True;
-              }
-            }
-            if ( $start-flag ) {
-              $.d.start-download( $url, $file-name );
-            }
-          }
-          when .Str eq 'delay' {
-            self.post-log-message( "Placing faulty download at the end of work "
-                                 ~ "queue: {$url0}" );
-            self.finish-download( $url0, :delay(True) );
-            return True;
-          }
-          when .Str eq 'abandon' {
-            self.post-log-message( "Download eventually failed: {$url0}" );
-            $.download-fault-notifier.( "Download failed: {$url0}" );
-            self.finish-download( $url0, :failed(True) );
-            $failure-counter.reset( $url0 );
-            return True;
-          }
+        if ( self.restart-download(
+          $url0, $url, %download-status<file-name>, $start-needed
+        ) ) {
+          return True;
         }
       }
     }
@@ -536,6 +471,95 @@ class Dispatcher is export {
       }
     }
     return False;
+  }
+
+  method check-download( Str $url0, Str $url, Int $size ) {
+    enum StartType < start restart >;
+
+    my %ret = Empty;
+
+    if ( ! $.download-allowed.() ) {
+      self.post-log-message( "Not starting download of {$url0} because of "
+                           ~ "schedule restriction in download-allowed()" );
+      %ret<finished> = False;
+      return %ret;
+    }
+
+    # NB: It's important to have consistent file name over time, so either
+    # get it from downloader or calculate from URL.
+    my $file-name = $.d.get-file-params-cached( $url )<file-name>
+                 // %.url-converters<file-name>( $url0 );
+
+    unless ( %ret<file-name> = $file-name ) {
+      self.post-log-message( "Can't derive target file name for {$url0}" );
+    }
+
+    my $target_fn = $.d.download-dir ~ '/' ~ $file-name;
+    if ( $file-name && $target_fn.IO.e && $target_fn.IO.f ) {
+      my $d_size = $target_fn.IO.s;
+      if ( $d_size >= $size ) {
+        if ( $d_size > $size ) {
+          self.post-log-message( "URL {$url0} download size exceeds estimate "
+                               ~ "({$d_size} vs. {$size}). Stopped "
+                               ~ "downloading." );
+        }
+        else {
+          self.post-log-message( "URL {$url0} finished." );
+        }
+        self.finish-download( $url0 );
+        $failure-counter.reset( $url0 );
+        %ret<finished> = True;
+        return %ret;
+      }
+      else {
+        %ret<start-needed> = restart;
+      }
+    }
+    else {
+      %ret<start-needed> = start;
+    }
+    return %ret;
+  }
+
+  method restart-download( Str $url0, Str $url, $file-name, $start-needed ) {
+    # NB: One of enum vals evaluates to 0 so need to check for definedness
+    if ( ( $start-needed // -1 ) !== -1 ) {
+      given self.register-restart( $url0 ) {
+        when .Str eq 'restart' {
+          # Additional protection against calling $.d.start-download() without
+          # posting a message in logs.
+          my Bool $start-flag = False;
+          given $start-needed {
+            when .Str eq 'start' {
+              self.post-log-message( "Started new URL download: {$url0}" );
+              $start-flag = True;
+            }
+            when .Str eq 'restart' {
+              self.post-log-message( "Restarted incomplete URL download: "
+                                   ~ $url0 );
+              $start-flag = True;
+            }
+          }
+          if ( $start-flag ) {
+            $.d.start-download( $url, $file-name );
+          }
+          return False;
+        }
+        when .Str eq 'delay' {
+          self.post-log-message( "Placing faulty download at the end of work "
+                               ~ "queue: {$url0}" );
+          self.finish-download( $url0, :delay(True) );
+          return True;
+        }
+        when .Str eq 'abandon' {
+          self.post-log-message( "Download eventually failed: {$url0}" );
+          $.download-fault-notifier.( "Download failed: {$url0}" );
+          self.finish-download( $url0, :failed(True) );
+          $failure-counter.reset( $url0 );
+          return True;
+        }
+      }
+    }
   }
 
   method finish-download( Str $url, Bool :$failed, Bool :$delay ) {
