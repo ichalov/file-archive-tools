@@ -451,6 +451,7 @@ class Dispatcher is export {
         return %download-status<finished>;
       }
       my $start-needed = %download-status<start-needed>;
+      # NB: One of enum vals evaluates to 0 so need to check for definedness
       if ( ( $start-needed // -1 ) !== -1 ) {
         if ( self.restart-download(
           $url0, $url, %download-status<file-name>, $start-needed
@@ -522,42 +523,39 @@ class Dispatcher is export {
   }
 
   method restart-download( Str $url0, Str $url, $file-name, $start-needed ) {
-    # NB: One of enum vals evaluates to 0 so need to check for definedness
-    if ( ( $start-needed // -1 ) !== -1 ) {
-      given self.register-restart( $url0 ) {
-        when .Str eq 'restart' {
-          # Additional protection against calling $.d.start-download() without
-          # posting a message in logs.
-          my Bool $start-flag = False;
-          given $start-needed {
-            when .Str eq 'start' {
-              self.post-log-message( "Started new URL download: {$url0}" );
-              $start-flag = True;
-            }
-            when .Str eq 'restart' {
-              self.post-log-message( "Restarted incomplete URL download: "
-                                   ~ $url0 );
-              $start-flag = True;
-            }
+    given self.register-restart( $url0 ) {
+      when .Str eq 'restart' {
+        # Additional protection against calling $.d.start-download() without
+        # posting a message in logs.
+        my Bool $start-flag = False;
+        given $start-needed {
+          when .Str eq 'start' {
+            self.post-log-message( "Started new URL download: {$url0}" );
+            $start-flag = True;
           }
-          if ( $start-flag ) {
-            $.d.start-download( $url, $file-name );
+          when .Str eq 'restart' {
+            self.post-log-message( "Restarted incomplete URL download: "
+                                 ~ $url0 );
+            $start-flag = True;
           }
-          return False;
         }
-        when .Str eq 'delay' {
-          self.post-log-message( "Placing faulty download at the end of work "
-                               ~ "queue: {$url0}" );
-          self.finish-download( $url0, :delay(True) );
-          return True;
+        if ( $start-flag ) {
+          $.d.start-download( $url, $file-name );
         }
-        when .Str eq 'abandon' {
-          self.post-log-message( "Download eventually failed: {$url0}" );
-          $.download-fault-notifier.( "Download failed: {$url0}" );
-          self.finish-download( $url0, :failed(True) );
-          $failure-counter.reset( $url0 );
-          return True;
-        }
+        return False;
+      }
+      when .Str eq 'delay' {
+        self.post-log-message( "Placing faulty download at the end of work "
+                             ~ "queue: {$url0}" );
+        self.finish-download( $url0, :delay(True) );
+        return True;
+      }
+      when .Str eq 'abandon' {
+        self.post-log-message( "Download eventually failed: {$url0}" );
+        $.download-fault-notifier.( "Download failed: {$url0}" );
+        self.finish-download( $url0, :failed(True) );
+        $failure-counter.reset( $url0 );
+        return True;
       }
     }
   }
