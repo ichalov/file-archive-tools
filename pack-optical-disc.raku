@@ -6,7 +6,6 @@
   TODO:
     Progress bar during calculation
     Output correspondent mkisofs commands
-    Feed from `ls -l` instead of live directory
     Get rid of global variables
     Add parallelization
 
@@ -23,11 +22,13 @@ my $max-container-size = max( %container-size-limits.values );
 
 my $script-description = Q:c:to/EOT/;
 
-  Tries to fit files from <src-dir> on optical disks of various sizes:
+  Tries to fit files from <src> on optical disks of various sizes:
   { ' ' x 4 ~ %container-size-limits.keys
         .sort( { %container-size-limits{$^a} <=> %container-size-limits{$^b} } )
         .join(', '); }
   Prints report with best fitting combinations of files on STDOUT.
+  <src> can be a directory or a file with `ls -l` output of the source directory
+  (or a dash for taking `ls -l` output from STDIN).
   EOT
 
 sub USAGE() {
@@ -43,7 +44,7 @@ my %file-sets = Empty;
 
 my $_speedups = False;
 
-sub MAIN ( Str $src-dir, Bool :$speedups, Str :$min-size ) {
+sub MAIN ( Str $src, Bool :$speedups, Str :$min-size ) {
 
   $_speedups = $speedups;
 
@@ -51,12 +52,33 @@ sub MAIN ( Str $src-dir, Bool :$speedups, Str :$min-size ) {
 
   my $min-size-bytes = $min-size ?? parse-file-size( $min-size ) !! 0;
 
-  for $src-dir.IO.dir -> $file {
+  my %src-files = Empty;
+  if ( $src.IO.d ) {
+    for $src.IO.dir -> $file {
+      next unless $file.IO.f;
+      my $size = $file.IO.s;
+      %src-files{ $file.basename } = $size;
+    }
+  }
+  elsif ( $src.IO.f ) {
+    %src-files = lsl-to-file-sizes( $src.IO.slurp );
+  }
+  elsif ( $src eq '-' ) {
+    %src-files = lsl-to-file-sizes( slurp );
+  }
+  else {
+    die "Can't parse source directory: {$src}";
+  }
+
+  unless %src-files {
+    die "Can't find any files in the source directory {$src}";
+  }
+
+  for %src-files.kv -> $file, $size {
     state Int $counter;
-    next unless $file.IO.f;
-    next if $file.IO.s < $min-size-bytes;
-    @file-names[++$counter] = $file.basename;
-    @file-sizes[$counter] = $file.IO.s;
+    next if $size < $min-size-bytes;
+    @file-names[++$counter] = $file;
+    @file-sizes[$counter] = $size;
   }
 
   # order the initial @tail as larger files first
@@ -155,6 +177,19 @@ sub parse-file-size( Str $size ) {
     die "Can't parse file size '{$size}', should be an integer optionally "
       ~ "followed by K, M or G, e.g.: 300k or 2G or 200000 (bytes)";
   }
+}
+
+sub lsl-to-file-sizes( Str $lsl ) {
+  my %file-sizes = Empty;
+
+  # TODO: Find a better way of handling spaces in dates and file names
+  my @m = $lsl ~~ m:g/ ^^\- [.+?\s+]**4 (\d+) \s+ [.+?\s+]**3 (.+?) $$ /;
+
+  for @m -> $m {
+    %file-sizes{ $m[1] } = $m[0];
+  }
+
+  return %file-sizes;
 }
 
 sub format-int( Int $n0 ) {
