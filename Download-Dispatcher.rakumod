@@ -157,8 +157,10 @@ class YT-DL-Download does Download is export {
 
   has $.youtube-dl = '/usr/bin/youtube-dl';
 
-  # TODO: Try to derive extension from @.additional-command-line-switches
-  has $.merged-output-extension = 'mkv';
+  # It's difficult to derive which extension the resulting file would have after
+  # merge (requires parsing of the output of download process itself and saving
+  # in persistent storage). So check against a list of possible extensions.
+  has @.merged-output-extensions = < mkv mp4 >;
 
   method start-download( $url, $file-name ) {
     my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl );
@@ -214,10 +216,24 @@ class YT-DL-Download does Download is export {
       # zero because Dispatcher can identify the download completion by
       # appearance of the target file without .part suffix in the download
       # directory.
-      # Assume extention for merged output (when format_id has + inside).
+      # It's difficult to know the resulting extension when merge is required
+      # (when format_id has + inside). Check various possible extensions and
+      # apply the one that corresponds to existing downloaded file. If no match
+      # (e.g. the file is still incomplete) then just assume extension as
+      # the first in the list of possible.
       my $ext;
       if ( $json<format_id> ~~ m/ ^ \d+ \+ \d+ $ / ) {
-        $ext = $.merged-output-extension;
+        for @.merged-output-extensions -> $_ext {
+          my $file-name = $.download-dir ~ '/' ~ $json-file-name;
+          $file-name ~~ s:i/\.info\.json\s*$/.$_ext/;
+          if ( $file-name.IO.f ) {
+            $ext = $_ext;
+            last;
+          }
+        }
+        unless $ext {
+          $ext = @.merged-output-extensions[0];
+        }
       }
       else {
         for |$json<formats> -> $fmt {
