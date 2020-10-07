@@ -37,6 +37,7 @@ successful completion similarly to `youtube-dl`. The script could be simplified
 by removing file size tracking in this case.
 =item Re-test $.take-next-download-wo-delay when no output file name could be
 derived.
+=item Try to perform merge in Download class
 
 =head2 AUTHOR
 
@@ -160,6 +161,8 @@ class YT-DL-Download does Download is export {
   # It's difficult to derive which extension the resulting file would have after
   # merge (requires parsing of the output of download process itself and saving
   # in persistent storage). So check against a list of possible extensions.
+  # TODO: Maybe the extension can be derived by looking at the audio stream
+  # extension.
   has @.merged-output-extensions = < mkv mp4 >;
 
   method start-download( $url, $file-name ) {
