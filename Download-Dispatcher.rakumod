@@ -382,7 +382,7 @@ class Dispatcher is export {
       }
     }
     spurt self.control-file( 'work-queue' ), $cont, :append;
-    spurt $fn, '';
+    spurt $fn, '' if $cont;
   }
 
   method add-download( Str $url ) {
