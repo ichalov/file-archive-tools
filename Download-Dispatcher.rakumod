@@ -158,13 +158,6 @@ class YT-DL-Download does Download is export {
 
   has $.youtube-dl = '/usr/bin/youtube-dl';
 
-  # It's difficult to derive which extension the resulting file would have after
-  # merge (requires parsing of the output of download process itself and saving
-  # in persistent storage). So check against a list of possible extensions.
-  # TODO: Maybe the extension can be derived by looking at the audio stream
-  # extension.
-  has @.merged-output-extensions = < mkv mp4 >;
-
   method start-download( $url, $file-name ) {
     my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl );
     if ( $.limit-rate ) {
@@ -219,31 +212,33 @@ class YT-DL-Download does Download is export {
       # zero because Dispatcher can identify the download completion by
       # appearance of the target file without .part suffix in the download
       # directory.
-      # It's difficult to know the resulting extension when merge is required
-      # (when format_id has + inside). Check various possible extensions and
-      # apply the one that corresponds to existing downloaded file. If no match
-      # (e.g. the file is still incomplete) then just assume extension as
-      # the first in the list of possible.
       my $ext;
-      if ( $json<format_id> ~~ m/ ^ \d+ \+ \d+ $ / ) {
-        for @.merged-output-extensions -> $_ext {
-          my $file-name = $.download-dir ~ '/' ~ $json-file-name;
-          $file-name ~~ s:i/\.info\.json\s*$/.$_ext/;
-          if ( $file-name.IO.f ) {
-            $ext = $_ext;
-            last;
+      sub ext-by-format-id( $fmt0 ) {
+        for |$json<formats> -> $fmt {
+          if ( $fmt<format_id> eq $fmt0 ) {
+            return $fmt<ext>;
           }
         }
-        unless $ext {
-          $ext = @.merged-output-extensions[0];
+        return '';
+      }
+      if ( $json<format_id> ~~ m/ ^ (\d+) \+ (\d+) $ / ) {
+        # In the case it's a compound format that is supposed to be merged, then
+        # check extensions of both video and audio. If they are '.mp4' and
+        # '.m4u', the resulting file extension would be '.mp4', otherwise it's
+        # most likely '.mkv'
+        if (
+            ext-by-format-id( $/[0] ) eq 'mp4'
+            &&
+            ext-by-format-id( $/[1] ) eq 'm4a'
+        ) {
+          $ext = 'mp4';
+        }
+        else {
+          $ext = 'mkv';
         }
       }
       else {
-        for |$json<formats> -> $fmt {
-          if ( $fmt<format_id> eq $json<format_id> ) {
-            $ext = $fmt<ext>;
-          }
-        }
+        $ext = ext-by-format-id( $json<format_id> );
       }
       if ( $ext ) {
         %ret<file-name> = $json-file-name;
