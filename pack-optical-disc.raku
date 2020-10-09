@@ -15,7 +15,7 @@
 # Sizes of containers (optical discs) to fit the files on (in bytes):
 my %container-size-limits = (
   'dvd4.5'  => 4700000000,
-  'dvd8.5'  => 8500000000,
+  'dvd8.5'  => 8549000000,
   'bd-r-25' => 25000000000,
 );
 my $max-container-size = max( %container-size-limits.values );
