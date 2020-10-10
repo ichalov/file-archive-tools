@@ -148,9 +148,10 @@ sub report-best-combinations( Int $report-items = 10 ) {
     state $count;
     my $container-size =
       %container-size-limits{ get-container-name-from-file-set( $file-set ) };
-    put $file-set.split('|')
-          .map({ $_.Numeric !~~ Failure ?? '  ' ~ @file-names[$_] !! $_ })
-          .join("\n"),
+    my @fs = $file-set.split('|');
+    put @fs.shift ~ "\n",
+        @fs.sort( { @file-sizes[$^b] <=> @file-sizes[$^a] } )
+          .map({ '  ' ~ @file-names[$_] }).join("\n"),
         "\n = ", format-int( %file-sets{$file-set} ), ' (',
         format-int( $container-size - %file-sets{$file-set} ), " remaining)\n";
     last if (++$count > $report-items);
