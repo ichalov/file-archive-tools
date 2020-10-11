@@ -61,6 +61,11 @@ role Download is export {
   has $.download-dir is rw = '.';
 
   has @.additional-command-line-switches = Empty;
+  has @!initial-command-line-switches = Empty;
+
+  submethod TWEAK ( :@additional-command-line-switches ) {
+    @!initial-command-line-switches = @additional-command-line-switches;
+  }
 
   has %.file-params-cache = Empty;
 
@@ -97,6 +102,19 @@ role Download is export {
   method process-exists-regex( Str $cmd, Str $url ) returns Regex {
     return
       rx:i{ ^^ \s* \w+ \s+ (\d+) \N+? <!after screen\N+> \W $cmd \W .+? $url };
+  }
+
+  method merge-in-command-line-switches( @new-switches ) {
+    # TODO: Need to remove switches remained from previous download
+    for @new-switches -> $clsw {
+      unless $clsw.trim eq any( |$.additional-command-line-switches ) {
+        $.additional-command-line-switches.append: $clsw
+      }
+    }
+  }
+
+  method reset-additional-command-line-switches() {
+    @.additional-command-line-switches = @!initial-command-line-switches;
   }
 }
 
@@ -316,6 +334,19 @@ class Dispatcher is export {
     self.d //= $downloader;
   }
 
+  # The structure holding the details of how each tag affects execution. Tags
+  # themselves are the first level of hash keys. The detail type is second
+  # level keys, the list of supported: 'downloader-switches'
+  has %.tags = Empty;
+
+  # The tags that should be applied if no tags are specified for a download in
+  # incoming/work-queue file
+  has @.default-tags = Empty;
+
+  # Tags attached to the current download (as read from 'downloading' control
+  # file)
+  has @!tags;
+
   # Number of sequential failures before download gets rescheduled
   has Int $.failures-before-reschedule = 3;
 
@@ -352,6 +383,7 @@ class Dispatcher is export {
     loop ( my $i = 0; $i < ( $.take-next-download-wo-delay ?? 3 !! 1 ); $i++ ) {
       my @cur = self.get-current-download();
       if ( @cur ) {
+        @!tags = @cur[2].split(',') if @cur[2];
         last unless self.check-restart-download( @cur[0], @cur[1].Int );
       }
       else {
@@ -404,7 +436,17 @@ class Dispatcher is export {
     return;
   }
 
-  method schedule-download( Str $url0 ) returns Bool {
+  method schedule-download( Str $url-ext ) returns Bool {
+    my ( $url0, $tags ) = $url-ext.split("\t");
+    if ( $tags ) {
+      @!tags = $tags.split(',');
+    }
+    else {
+      @!tags = Empty;
+    }
+    $.d.reset-additional-command-line-switches();
+    self.pass-tag-cl-switches-to-downloader();
+
     my $url = %.url-converters<url>( $url0 );
 
     my %file-params = $.d.get-file-params-cached( $url );
@@ -432,7 +474,8 @@ class Dispatcher is export {
       return False;
     }
 
-    spurt $fn, "{$url0}\t{$target-size}\n";
+    spurt $fn, "{$url0}\t{$target-size}"
+             ~ ( $tags ?? "\t{$tags}" !! '' ) ~ "\n";
 
     self.post-log-message( "Scheduled {$url0} for download" );
 
@@ -445,7 +488,7 @@ class Dispatcher is export {
       for $fn.IO.lines -> $line {
         my @cols = $line.split( "\t" );
         if ( @cols.elems > 1 ) {
-          # it's supposed to be formatted like: URL, size (bytes)
+          # it's supposed to be formatted like: URL, size (bytes), tags (optional)
           return @cols;
         }
       }
@@ -456,6 +499,8 @@ class Dispatcher is export {
   # NB: Returns True if it removed current download because it ended or shows
   # failures.
   method check-restart-download( Str $url0, Int $size ) returns Bool {
+
+    self.pass-tag-cl-switches-to-downloader();
 
     my $url = %.url-converters<url>( $url0 );
 
@@ -599,9 +644,9 @@ class Dispatcher is export {
     # NB: 'downloading' file only supposed to have only one line
     my $l = $fn0.IO.lines[0];
     if ( $l ~~ m:i/ $url / ) {
-      # Don't copy file size into work queue
+      # Don't copy file size into work queue, but copy previously saved tags
       if ( $delay ) {
-        $l = $url;
+        $l = $url ~ ( @!tags ?? "\t" ~ @!tags.join(',') !! '' );
       }
       spurt $fn, $l ~ "\n", :append;
       spurt $fn0, '';
@@ -623,6 +668,17 @@ class Dispatcher is export {
       $ret = abandon;
     }
     return $ret;
+  }
+
+  method pass-tag-cl-switches-to-downloader() {
+    my @tags = @!tags || @.default-tags;
+    if ( @tags ) {
+      for @tags -> $tag {
+        if ( my @clsw = %.tags{$tag.trim}<downloader-switches> ) {
+          $.d.merge-in-command-line-switches( @clsw );
+        }
+      }
+    }
   }
 
   method control-file ( Str $fid ) {
