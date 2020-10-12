@@ -242,14 +242,16 @@ class YT-DL-Download does Download is export {
       if ( $json<format_id> ~~ m/ ^ (\d+) \+ (\d+) $ / ) {
         # In the case it's a compound format that is supposed to be merged, then
         # check extensions of both video and audio. If they are '.mp4' and
-        # '.m4u', the resulting file extension would be '.mp4', otherwise it's
-        # most likely '.mkv'
-        if (
-            ext-by-format-id( $/[0] ) eq 'mp4'
-            &&
-            ext-by-format-id( $/[1] ) eq 'm4a'
-        ) {
+        # '.m4u', the resulting file extension would be '.mp4', if both of them
+        # are '.webm', then the resulting extension it to be the same, and if
+        # some other combination, then the resulting file would most likely have
+        # '.mkv' extension.
+        my ( $v, $a ) = |$/.map: { ext-by-format-id( $_.Str ) };
+        if ( $v eq 'mp4' && $a eq 'm4a' ) {
           $ext = 'mp4';
+        }
+        elsif ( $v eq 'webm' && $a eq 'webm' ) {
+          $ext = 'webm';
         }
         else {
           $ext = 'mkv';
