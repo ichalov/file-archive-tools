@@ -317,6 +317,43 @@ class StoredStrIntMap {
    }
 }
 
+class TagManager {
+
+  # The structure holding the details of how each tag affects execution. Tags
+  # themselves are the first level of hash keys. The detail type is second
+  # level keys, the list of supported: 'downloader-switches'
+  has %.tag-descriptors = Empty;
+
+  # The tags that should be applied if no tags are specified for a download in
+  # incoming/work-queue file
+  has @.default-tags = Empty;
+
+  # Tags attached to the current download (as read from 'downloading' control
+  # file)
+  has @!tags;
+
+  method set-tags( @new-tags ) {
+    @!tags = @new-tags.map: { $_.trim };
+  }
+
+  method get-tags() {
+    return @!tags;
+  }
+
+  method get-downloader-switches() {
+    my @dlsw = Empty;
+    my @tags = @!tags || @.default-tags;
+    if ( @tags ) {
+      for @tags -> $tag {
+        if ( my @clsw = %.tag-descriptors{$tag.trim}<downloader-switches> ) {
+          @dlsw.append: @clsw;
+        }
+      }
+    }
+    return @dlsw;
+  }
+}
+
 # NB: main() is the entry point, make other methods private.
 class Dispatcher is export {
 
@@ -336,18 +373,15 @@ class Dispatcher is export {
     self.d //= $downloader;
   }
 
-  # The structure holding the details of how each tag affects execution. Tags
-  # themselves are the first level of hash keys. The detail type is second
-  # level keys, the list of supported: 'downloader-switches'
-  has %.tags = Empty;
+  has TagManager $!tm = TagManager.new;
 
-  # The tags that should be applied if no tags are specified for a download in
-  # incoming/work-queue file
-  has @.default-tags = Empty;
-
-  # Tags attached to the current download (as read from 'downloading' control
-  # file)
-  has @!tags;
+  # TODO: Explore how to do the following as assignation and not method call.
+  method tag-descriptors( %tag-descriptors ) {
+    $!tm.tag-descriptors = %tag-descriptors if %tag-descriptors;
+  }
+  method default-tags( @default-tags ) {
+    $!tm.default-tags = @default-tags if @default-tags;
+  }
 
   # Number of sequential failures before download gets rescheduled
   has Int $.failures-before-reschedule = 3;
@@ -385,7 +419,7 @@ class Dispatcher is export {
     loop ( my $i = 0; $i < ( $.take-next-download-wo-delay ?? 3 !! 1 ); $i++ ) {
       my @cur = self.get-current-download();
       if ( @cur ) {
-        @!tags = @cur[2].split(',') if @cur[2];
+        $!tm.set-tags( @cur[2].split(',') ) if @cur[2];
         last unless self.check-restart-download( @cur[0], @cur[1].Int );
       }
       else {
@@ -441,10 +475,10 @@ class Dispatcher is export {
   method schedule-download( Str $url-ext ) returns Bool {
     my ( $url0, $tags ) = $url-ext.split("\t");
     if ( $tags ) {
-      @!tags = $tags.split(',');
+      $!tm.set-tags( $tags.split(',') );
     }
     else {
-      @!tags = Empty;
+      $!tm.set-tags( Empty );
     }
     $.d.reset-additional-command-line-switches();
     self.pass-tag-cl-switches-to-downloader();
@@ -648,7 +682,8 @@ class Dispatcher is export {
     if ( $l ~~ m:i/ $url / ) {
       # Don't copy file size into work queue, but copy previously saved tags
       if ( $delay ) {
-        $l = $url ~ ( @!tags ?? "\t" ~ @!tags.join(',') !! '' );
+        my @tgs = $!tm.get-tags();
+        $l = $url ~ ( @tgs ?? "\t" ~ @tgs.join(',') !! '' );
       }
       spurt $fn, $l ~ "\n", :append;
       spurt $fn0, '';
@@ -673,14 +708,7 @@ class Dispatcher is export {
   }
 
   method pass-tag-cl-switches-to-downloader() {
-    my @tags = @!tags || @.default-tags;
-    if ( @tags ) {
-      for @tags -> $tag {
-        if ( my @clsw = %.tags{$tag.trim}<downloader-switches> ) {
-          $.d.merge-in-command-line-switches( @clsw );
-        }
-      }
-    }
+    $.d.merge-in-command-line-switches( $!tm.get-downloader-switches );
   }
 
   method control-file ( Str $fid ) {
