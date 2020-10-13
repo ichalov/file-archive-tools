@@ -367,27 +367,25 @@ class Dispatcher is export {
 
   has Download $.d is rw;
 
-  submethod TWEAK ( Download :$downloader ) {
-    # A longer alias for $.d allows to clarify meaning in constructor but still
-    # use shorter attribute name inside the class
-    self.d //= $downloader;
-  }
-
   has TagManager $!tm = TagManager.new;
 
-  # TODO: Explore how to do the following as assignation and not method call.
-  method tag-descriptors( %tag-descriptors ) {
-    $!tm.tag-descriptors = %tag-descriptors if %tag-descriptors;
-  }
-  method default-tags( @default-tags ) {
-    $!tm.default-tags = @default-tags if @default-tags;
-  }
+  method tag-descriptors is rw { $!tm.tag-descriptors }
+  method default-tags is rw { $!tm.default-tags; }
 
   # Number of sequential failures before download gets rescheduled
   has Int $.failures-before-reschedule = 3;
 
   # Number of sequential failures before rescheduled download gets abandoned
   has Int $.failures-before-stop = 6; # i.e. two after reschedule
+
+  submethod TWEAK ( Download :$downloader, :%tag-descriptors, :@default-tags ) {
+    # A longer alias for $.d allows to clarify meaning in constructor but still
+    # use shorter attribute name inside the class
+    self.d //= $downloader;
+
+    $!tm.tag-descriptors = %tag-descriptors if %tag-descriptors;
+    $!tm.default-tags = @default-tags if @default-tags;
+  }
 
   has StoredStrIntMap $failure-counter = StoredStrIntMap.new(
     :storage-file( self.control-file( 'restart-counts' ) )
