@@ -118,6 +118,11 @@ role Download is export {
   method reset-additional-command-line-switches() {
     @.additional-command-line-switches = @!initial-command-line-switches;
   }
+
+  method check-create-subdir( Str $subdir ) {
+    my $dir = $.download-dir ~ '/' ~ $subdir;
+    mkdir( $dir ) unless ( $dir.IO.d )
+  }
 }
 
 # NB: depends on wget, screen and ps.
@@ -179,6 +184,20 @@ class YT-DL-Download does Download is export {
   has $.youtube-dl = '/usr/bin/youtube-dl';
 
   method start-download( $url, $file-name ) {
+
+    # TODO: Make youtube-dl save into subdir without chdir()
+    if ( $file-name ~~ m/ ^ (\w+) \/ / ) {
+      my $dir = $.download-dir ~ '/' ~ $/[0].Str;
+      if ( $dir.IO.d ) {
+        chdir( $dir );
+      }
+    }
+    else {
+      if ( $.download-dir.IO.d ) {
+        chdir( $.download-dir );
+      }
+    }
+
     my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl );
     if ( $.limit-rate ) {
       @cmd.push: '-r', $.limit-rate;
@@ -323,7 +342,7 @@ class TagManager {
 
   # The structure holding the details of how each tag affects execution. Tags
   # themselves are the first level of hash keys. The detail type is second
-  # level keys, the list of supported: 'downloader-switches'
+  # level keys, the list of supported: 'downloader-switches', 'subdir'
   has %.tag-descriptors = Empty;
 
   # The tags that should be applied if no tags are specified for a download in
@@ -342,17 +361,31 @@ class TagManager {
     return @!tags;
   }
 
+  method get-active-tag-list() {
+    return @!tags if @!tags;
+    return @.default-tags;
+  }
+
   method get-downloader-switches() {
     my @dlsw = Empty;
-    my @tags = @!tags || @.default-tags;
-    if ( @tags ) {
-      for @tags -> $tag {
-        if ( my @clsw = %.tag-descriptors{$tag.trim}<downloader-switches> ) {
-          @dlsw.append: @clsw;
-        }
+    for self.get-active-tag-list() -> $tag {
+      if ( %.tag-descriptors{$tag}<downloader-switches>:exists ) {
+        my @clsw = %.tag-descriptors{$tag}<downloader-switches>;
+        @dlsw.append: @clsw;
       }
     }
     return @dlsw;
+  }
+
+  # TODO: This just returns subdir from the first tag that has it. It may be
+  # re-made to support a multilevel directory tree
+  method get-subdir() {
+    for self.get-active-tag-list() -> $tag {
+      if my $subdir = %.tag-descriptors{$tag}<subdir>.trim {
+        $subdir ~~ s/ \/ $ //;
+        return $subdir;
+      }
+    }
   }
 }
 
@@ -590,6 +623,10 @@ class Dispatcher is export {
       self.post-log-message( "Can't derive target file name for {$url0}" );
     }
 
+    if ( my $subdir = $!tm.get-subdir ) {
+      $file-name = $subdir ~ '/' ~ $file-name;
+    }
+
     my $target_fn = $.d.download-dir ~ '/' ~ $file-name;
     if ( $file-name && $target_fn.IO.e && $target_fn.IO.f ) {
       my $d_size = $target_fn.IO.s;
@@ -635,7 +672,12 @@ class Dispatcher is export {
           }
         }
         if ( $start-flag ) {
-          $.d.start-download( $url, $file-name );
+          my $fn = $file-name;
+          if ( my $subdir = $!tm.get-subdir ) {
+            $fn = $subdir ~ '/' ~ $file-name;
+            $.d.check-create-subdir( $subdir );
+          }
+          $.d.start-download( $url, $fn );
         }
         return False;
       }
