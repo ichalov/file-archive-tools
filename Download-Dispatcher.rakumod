@@ -366,17 +366,11 @@ class Dispatcher is export {
   );
 
   has Download $.d is rw;
+  method downloader is rw { $.d }
 
   has TagManager $!tm = TagManager.new;
-
   method tag-descriptors is rw { $!tm.tag-descriptors }
   method default-tags is rw { $!tm.default-tags; }
-
-  # Number of sequential failures before download gets rescheduled
-  has Int $.failures-before-reschedule = 3;
-
-  # Number of sequential failures before rescheduled download gets abandoned
-  has Int $.failures-before-stop = 6; # i.e. two after reschedule
 
   submethod TWEAK ( Download :$downloader, :%tag-descriptors, :@default-tags ) {
     # A longer alias for $.d allows to clarify meaning in constructor but still
@@ -386,6 +380,12 @@ class Dispatcher is export {
     $!tm.tag-descriptors = %tag-descriptors if %tag-descriptors;
     $!tm.default-tags = @default-tags if @default-tags;
   }
+
+  # Number of sequential failures before download gets rescheduled
+  has Int $.failures-before-reschedule = 3;
+
+  # Number of sequential failures before rescheduled download gets abandoned
+  has Int $.failures-before-stop = 6; # i.e. two after reschedule
 
   has StoredStrIntMap $failure-counter = StoredStrIntMap.new(
     :storage-file( self.control-file( 'restart-counts' ) )
