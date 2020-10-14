@@ -47,6 +47,9 @@ Victor Ichalov <ichalov@gmail.com>, 2020
 
 unit module Download-Dispatcher;
 
+# NB: The main class in this module is Dispatcher. It's located towards bottom
+# of the file because of the dependencies that have to enter earlier.
+
 my %dispatcher-storage = (
   incoming => 'incoming.txt',
   work-queue => 'download.txt',
@@ -105,7 +108,6 @@ role Download is export {
   }
 
   method merge-in-command-line-switches( @new-switches ) {
-    # TODO: Need to remove switches remained from previous download
     for @new-switches -> $clsw {
       unless $clsw.trim eq any( |$.additional-command-line-switches ) {
         $.additional-command-line-switches.append: $clsw
