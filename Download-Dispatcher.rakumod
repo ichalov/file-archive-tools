@@ -267,7 +267,7 @@ class YT-DL-Download does Download is export {
         # are '.webm', then the resulting extension it to be the same, and if
         # some other combination, then the resulting file would most likely have
         # '.mkv' extension.
-        my ( $v, $a ) = |$/.map: { ext-by-format-id( $_.Str ) };
+        my ( $v, $a ) = |$/.map: { ext-by-format-id( .Str ) };
         if ( $v eq 'mp4' && $a eq 'm4a' ) {
           $ext = 'mp4';
         }
@@ -354,7 +354,7 @@ class TagManager {
   has @!tags;
 
   method set-tags( @new-tags ) {
-    @!tags = @new-tags.map: { $_.trim };
+    @!tags = @new-tags.map: { .trim };
   }
 
   method get-tags() {
