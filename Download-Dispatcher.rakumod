@@ -342,7 +342,8 @@ class TagManager {
 
   # The structure holding the details of how each tag affects execution. Tags
   # themselves are the first level of hash keys. The detail type is second
-  # level keys, the list of supported: 'downloader-switches', 'subdir'
+  # level keys, the list of supported: 'downloader-switches', 'subdir',
+  # 'url-converter', 'url-to-file-name'
   has %.tag-descriptors = Empty;
 
   # The tags that should be applied if no tags are specified for a download in
@@ -381,11 +382,30 @@ class TagManager {
   # re-made to support a multilevel directory tree
   method get-subdir() {
     for self.get-active-tag-list() -> $tag {
-      if my $subdir = %.tag-descriptors{$tag}<subdir>.trim {
+      if %.tag-descriptors{$tag}<subdir>:exists {
+        my $subdir = %.tag-descriptors{$tag}<subdir>.trim;
         $subdir ~~ s/ \/ $ //;
         return $subdir;
       }
     }
+  }
+
+  method get-url-converter() returns Code {
+    for self.get-active-tag-list() -> $tag {
+      if %.tag-descriptors{$tag}<url-converter>.^name eq 'Sub' {
+        return %.tag-descriptors{$tag}<url-converter>;
+      }
+    }
+    return;
+  }
+
+  method get-url-to-file-name() returns Code {
+    for self.get-active-tag-list() -> $tag {
+      if %.tag-descriptors{$tag}<url-to-file-name>.^name eq 'Sub' {
+        return %.tag-descriptors{$tag}<url-to-file-name>;
+      }
+    }
+    return;
   }
 }
 
@@ -516,7 +536,7 @@ class Dispatcher is export {
     $.d.reset-additional-command-line-switches();
     self.pass-tag-cl-switches-to-downloader();
 
-    my $url = %.url-converters<url>( $url0 );
+    my $url = self.convert-url( $url0 );
 
     my %file-params = $.d.get-file-params-cached( $url );
     my $target-size = %file-params<size-bytes>;
@@ -538,7 +558,7 @@ class Dispatcher is export {
     my @lines = $fn0.IO.lines.grep( { ! /$url0/ && ! / ^ \s* $ / } );
     spurt $fn0, @lines.join("\n") ~ ( @lines ?? "\n" !! '' );
 
-    if ( ! %file-params<file-name> && ! %.url-converters<file-name>( $url0 ) ) {
+    if ( ! %file-params<file-name> && ! self.url-to-file-name( $url0 ) ) {
       say "Can't derive file name for {$url0} - skipping";
       return False;
     }
@@ -571,7 +591,7 @@ class Dispatcher is export {
 
     self.pass-tag-cl-switches-to-downloader();
 
-    my $url = %.url-converters<url>( $url0 );
+    my $url = self.convert-url( $url0 );
 
     if ( ! $.d.download-process-exists( $url ) ) {
       my %download-status = self.check-download( $url0, $url, $size );
@@ -617,7 +637,7 @@ class Dispatcher is export {
     # NB: It's important to have consistent file name over time, so either
     # get it from downloader or calculate from URL.
     my $file-name = $.d.get-file-params-cached( $url )<file-name>
-                 // %.url-converters<file-name>( $url0 );
+                 // self.url-to-file-name( $url0 );
 
     unless ( %ret<file-name> = $file-name ) {
       self.post-log-message( "Can't derive target file name for {$url0}" );
@@ -747,6 +767,20 @@ class Dispatcher is export {
       $ret = abandon;
     }
     return $ret;
+  }
+
+  method convert-url( Str $url0 ) {
+    if my $from-tags = $!tm.get-url-converter() {
+      return $from-tags( $url0 );
+    }
+    return %.url-converters<url>( $url0 );
+  }
+
+  method url-to-file-name( Str $url0 ) {
+    if my $from-tags = $!tm.get-url-to-file-name() {
+      return $from-tags( $url0 );
+    }
+    return %.url-converters<file-name>( $url0 );
   }
 
   method pass-tag-cl-switches-to-downloader() {
