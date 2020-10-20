@@ -342,8 +342,8 @@ class TagManager {
 
   # The structure holding the details of how each tag affects execution. Tags
   # themselves are the first level of hash keys. The detail type is second
-  # level keys, the list of supported: 'downloader-switches', 'subdir',
-  # 'url-converter', 'url-to-file-name'
+  # level keys, the list of supported: 'downloader', 'downloader-switches',
+  # 'subdir', 'url-converter' (subref), 'url-to-file-name' (subref)
   has %.tag-descriptors = Empty;
 
   # The tags that should be applied if no tags are specified for a download in
@@ -403,6 +403,15 @@ class TagManager {
     for self.get-active-tag-list() -> $tag {
       if %.tag-descriptors{$tag}<url-to-file-name>.^name eq 'Sub' {
         return %.tag-descriptors{$tag}<url-to-file-name>;
+      }
+    }
+    return;
+  }
+
+  method get-downloader() returns Download {
+    for self.get-active-tag-list() -> $tag {
+      if %.tag-descriptors{$tag}<downloader> ~~ Download {
+        return %.tag-descriptors{$tag}<downloader>.clone;
       }
     }
     return;
@@ -473,6 +482,7 @@ class Dispatcher is export {
       my @cur = self.get-current-download();
       if ( @cur ) {
         $!tm.set-tags( @cur[2].split(',') ) if @cur[2];
+        $.d = $!tm.get-downloader() || $.d;
         last unless self.check-restart-download( @cur[0], @cur[1].Int );
       }
       else {
@@ -533,6 +543,7 @@ class Dispatcher is export {
     else {
       $!tm.set-tags( Empty );
     }
+    $.d = $!tm.get-downloader() || $.d;
     $.d.reset-additional-command-line-switches();
     self.pass-tag-cl-switches-to-downloader();
 
