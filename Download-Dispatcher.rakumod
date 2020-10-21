@@ -128,7 +128,7 @@ role Download is export {
 # NB: depends on wget, screen and ps.
 class Wget-Download does Download is export {
 
-  has $.limit-rate is rw; # in bytes
+  has $.limit-rate is rw; # in bytes per second
 
   has $!wget = '/usr/bin/wget';
 
@@ -179,7 +179,7 @@ class Wget-Download does Download is export {
 # NB: depends on youtube-dl, screen and ps.
 class YT-DL-Download does Download is export {
 
-  has $.limit-rate is rw; # in bytes
+  has $.limit-rate is rw; # in bytes per second
 
   has $.youtube-dl = '/usr/bin/youtube-dl';
 
@@ -482,7 +482,7 @@ class Dispatcher is export {
       my @cur = self.get-current-download();
       if ( @cur ) {
         $!tm.set-tags( @cur[2].split(',') ) if @cur[2];
-        $.d = $!tm.get-downloader() || $.d;
+        self.assign-downloader();
         last unless self.check-restart-download( @cur[0], @cur[1].Int );
       }
       else {
@@ -543,7 +543,7 @@ class Dispatcher is export {
     else {
       $!tm.set-tags( Empty );
     }
-    $.d = $!tm.get-downloader() || $.d;
+    self.assign-downloader();
     $.d.reset-additional-command-line-switches();
     self.pass-tag-cl-switches-to-downloader();
 
@@ -792,6 +792,16 @@ class Dispatcher is export {
       return $from-tags( $url0 );
     }
     return %.url-converters<file-name>( $url0 );
+  }
+
+  method assign-downloader() {
+    if ( my $d = $!tm.get-downloader() ) {
+      $d.download-dir ||= $.d.download-dir;
+      if ( $d.^lookup('limit-rate') && $.d.^lookup('limit-rate') ) {
+        $d.limit-rate ||= $.d.limit-rate;
+      }
+      $.d = $d;
+    }
   }
 
   method pass-tag-cl-switches-to-downloader() {
