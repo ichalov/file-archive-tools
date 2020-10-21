@@ -10,7 +10,7 @@ An example of crontab script that could be used with this module:
 use lib <.>;
 use Download-Dispatcher;
 
-my $dl = Wget-Download.new: :limit-rate(160000) :download-dir('.');
+my $dl = Wget-Download.new: :limit-rate(102400) :download-dir('.');
 my $d = Dispatcher.new :downloader($dl) :dispatcher-dir('.');
 
 $d.url-converters<url> = {
@@ -25,6 +25,13 @@ $d.download-allowed = sub {
  my $h = DateTime.now.hour;
  return ( $h >= 2 && $h < 8 );
 }
+$d.tag-descriptors = (
+  'distributions' => %(
+    'url-regexps' => ( rx:i/centos.+iso\s*$/, rx:i/debian.+iso\s*$/ ),
+    'downloader' => Wget-Download.new( :limit-rate(153600) ),
+    'subdir' => 'distr'
+  ),
+);
 
 $d.main();
 =end code
@@ -38,6 +45,7 @@ by removing file size tracking in this case.
 =item Re-test $.take-next-download-wo-delay when no output file name could be
 derived.
 =item Try to perform merge in Download class
+=item Re-check what happens on exceptions
 
 =head2 AUTHOR
 
@@ -133,6 +141,11 @@ class Wget-Download does Download is export {
   has $!wget = '/usr/bin/wget';
 
   method start-download( $url, $file-name ) {
+
+    # NB: This is needed because other downloaders might chdir() somewhere else
+    # before
+    chdir( $.download-dir );
+
     my @cmd = ( '/usr/bin/screen', '-d', '-m', $!wget, '-c' );
     if ( $.limit-rate ) {
       @cmd.push: "--limit-rate={$.limit-rate}";
@@ -343,7 +356,8 @@ class TagManager {
   # The structure holding the details of how each tag affects execution. Tags
   # themselves are the first level of hash keys. The detail type is second
   # level keys, the list of supported: 'downloader', 'downloader-switches',
-  # 'subdir', 'url-converter' (subref), 'url-to-file-name' (subref)
+  # 'subdir', 'url-converter' (subref), 'url-to-file-name' (subref),
+  # 'url-regexps'
   has %.tag-descriptors = Empty;
 
   # The tags that should be applied if no tags are specified for a download in
@@ -354,8 +368,23 @@ class TagManager {
   # file)
   has @!tags;
 
-  method set-tags( @new-tags ) {
+  # TODO: Make tags case-insensitive
+  multi method set-tags( @new-tags ) {
     @!tags = @new-tags.map: { .trim };
+  }
+
+  multi method set-tags( Str $url, @new-tags ) {
+    self.set-tags( @new-tags );
+
+    for %.tag-descriptors.keys -> $tag {
+      if %.tag-descriptors{$tag}<url-regexps> {
+        for |%.tag-descriptors{$tag}<url-regexps> -> $re {
+          if $url ~~ $re && $tag ne any( @!tags ) {
+            @!tags.append: $tag;
+          }
+        }
+      }
+    }
   }
 
   method get-tags() {
@@ -482,7 +511,7 @@ class Dispatcher is export {
     loop ( my $i = 0; $i < ( $.take-next-download-wo-delay ?? 3 !! 1 ); $i++ ) {
       my @cur = self.get-current-download();
       if ( @cur ) {
-        $!tm.set-tags( @cur[2].split(',') ) if @cur[2];
+        $!tm.set-tags( @cur[0], ( @cur[2] || '' ).split(',') );
         self.assign-downloader();
         last unless self.check-restart-download( @cur[0], @cur[1].Int );
       }
@@ -539,10 +568,10 @@ class Dispatcher is export {
   method schedule-download( Str $url-ext ) returns Bool {
     my ( $url0, $tags ) = $url-ext.split("\t");
     if ( $tags ) {
-      $!tm.set-tags( $tags.split(',') );
+      $!tm.set-tags( $url0, $tags.split(',') );
     }
     else {
-      $!tm.set-tags( Empty );
+      $!tm.set-tags( $url0, Empty );
     }
     self.assign-downloader();
     $.d.reset-additional-command-line-switches();
@@ -551,7 +580,7 @@ class Dispatcher is export {
     my $url = self.convert-url( $url0 );
 
     my %file-params = $.d.get-file-params-cached( $url );
-    my $target-size = %file-params<size-bytes>;
+    my $target-size = %file-params<size-bytes> || 0;
 
     my $fn0 = self.control-file( 'work-queue' );
     my $fn = self.control-file( 'downloading' );
