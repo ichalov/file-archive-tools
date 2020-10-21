@@ -430,6 +430,7 @@ class Dispatcher is export {
   );
 
   has Download $.d is rw;
+  has Download $!initial-downloader;
   method downloader is rw { $.d }
 
   has TagManager $!tm = TagManager.new;
@@ -795,12 +796,22 @@ class Dispatcher is export {
   }
 
   method assign-downloader() {
+    unless ( $!initial-downloader ) {
+      $!initial-downloader = $.d;
+    }
     if ( my $d = $!tm.get-downloader() ) {
-      $d.download-dir ||= $.d.download-dir;
-      if ( $d.^lookup('limit-rate') && $.d.^lookup('limit-rate') ) {
-        $d.limit-rate ||= $.d.limit-rate;
+      $d.download-dir ||= $!initial-downloader.download-dir;
+      if (
+          $d.^lookup('limit-rate')
+          &&
+          $!initial-downloader.^lookup('limit-rate')
+      ) {
+        $d.limit-rate ||= $!initial-downloader.limit-rate;
       }
       $.d = $d;
+    }
+    else {
+      $.d = $!initial-downloader;
     }
   }
 
