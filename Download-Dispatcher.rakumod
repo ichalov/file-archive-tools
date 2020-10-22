@@ -363,9 +363,8 @@ class TagManager {
   # file)
   has @!tags;
 
-  # TODO: Make tags case-insensitive
   multi method set-tags( @new-tags ) {
-    @!tags = @new-tags.map: { .trim };
+    @!tags = @new-tags.map: { .trim.lc };
   }
 
   multi method set-tags( Str $url, @new-tags ) {
@@ -375,7 +374,7 @@ class TagManager {
       if %.tag-descriptors{$tag}<url-regexps> {
         for |%.tag-descriptors{$tag}<url-regexps> -> $re {
           if $url ~~ $re && $tag ne any( @!tags ) {
-            @!tags.append: $tag;
+            @!tags.append: $tag.lc;
           }
         }
       }
@@ -383,7 +382,7 @@ class TagManager {
   }
 
   method get-tags() {
-    return @!tags;
+    return @!tags.grep: { $_ };
   }
 
   method get-active-tag-list() {
@@ -600,7 +599,7 @@ class Dispatcher is export {
     }
 
     spurt $fn, "{$url0}\t{$target-size}"
-             ~ ( $tags ?? "\t{$tags}" !! '' ) ~ "\n";
+             ~ ( $!tm.get-tags() ?? "\t" ~ $!tm.get-tags().join(',') !! '' ) ~ "\n";
 
     self.post-log-message( "Scheduled {$url0} for download" );
 
