@@ -141,11 +141,6 @@ class Wget-Download does Download is export {
   has $!wget = '/usr/bin/wget';
 
   method start-download( $url, $file-name ) {
-
-    # NB: This is needed because other downloaders might chdir() somewhere else
-    # before
-    chdir( $.download-dir );
-
     my @cmd = ( '/usr/bin/screen', '-d', '-m', $!wget, '-c' );
     if ( $.limit-rate ) {
       @cmd.push: "--limit-rate={$.limit-rate}";
@@ -829,7 +824,12 @@ class Dispatcher is export {
       $!initial-downloader = $.d;
     }
     if ( my $d = $!tm.get-downloader() ) {
-      $d.download-dir ||= $!initial-downloader.download-dir;
+      if ( ! $d.download-dir || $d.download-dir eq '.' ) {
+        my $dd = $!initial-downloader.download-dir;
+        if ( $dd && $dd ne '.' ) {
+          $d.download-dir = $dd;
+        }
+      }
       if (
           $d.^lookup('limit-rate')
           &&
