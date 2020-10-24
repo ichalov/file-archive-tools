@@ -472,7 +472,7 @@ class Dispatcher is export {
   # Number of sequential failures before rescheduled download gets abandoned
   has Int $.failures-before-stop = 6; # i.e. two after reschedule
 
-  has StoredStrIntMap $failure-counter = StoredStrIntMap.new(
+  has StoredStrIntMap $.failure-counter is rw = StoredStrIntMap.new(
     :storage-file( self.control-file( 'restart-counts' ) )
   );
 
@@ -573,34 +573,40 @@ class Dispatcher is export {
     my %file-params = $.d.get-file-params-cached( $url );
     my $target-size = %file-params<size-bytes> || 0;
 
-    my $fn0 = self.control-file( 'work-queue' );
-    my $fn = self.control-file( 'downloading' );
-
-    if ( ! $fn0.IO.e ) {
-      self.post-error-message( "Can't find file {$fn0}" );
-      return False;
-    }
-
-    if ( $fn.IO.e && self.get-current-download() ) {
-      self.post-error-message( "{$fn} is not empty" );
-      return False;
-    }
-
-    # TODO: Maybe need a more robust solution for removing lines from source
-    my @lines = $fn0.IO.lines.grep( { ! /$url0/ && ! / ^ \s* $ / } );
-    spurt $fn0, @lines.join("\n") ~ ( @lines ?? "\n" !! '' );
-
     if ( ! %file-params<file-name> && ! self.url-to-file-name( $url0 ) ) {
       say "Can't derive file name for {$url0} - skipping";
       return False;
     }
 
-    spurt $fn, "{$url0}\t{$target-size}"
-             ~ ( $!tm.get-tags() ?? "\t" ~ $!tm.get-tags().join(',') !! '' ) ~ "\n";
+    self.save-url-as-scheduled( $url0, $target-size );
+    self.remove-url-from-work-queue( $url0 );
 
     self.post-log-message( "Scheduled {$url0} for download" );
 
     return True;
+  }
+
+  method save-url-as-scheduled( Str $url0, Int $target-size ) {
+
+    my $fn = self.control-file( 'downloading' );
+    if ( $fn.IO.e && self.get-current-download() ) {
+      die "{$fn} is not empty inside schedule-download()";
+    }
+
+    spurt $fn, "{$url0}\t{$target-size}"
+             ~ ( $!tm.get-tags() ?? "\t" ~ $!tm.get-tags().join(',') !! '' ) ~ "\n";
+  }
+
+  method remove-url-from-work-queue( Str $url0 ) {
+    my $fn0 = self.control-file( 'work-queue' );
+
+    if ( ! $fn0.IO.e ) {
+      die "Can't find file {$fn0} inside schedule-download()";
+    }
+
+    # TODO: Maybe need a more robust solution for removing lines from source
+    my @lines = $fn0.IO.lines.grep( { ! /$url0/ && ! / ^ \s* $ / } );
+    spurt $fn0, @lines.join("\n") ~ ( @lines ?? "\n" !! '' );
   }
 
   method get-current-download() {
@@ -643,7 +649,7 @@ class Dispatcher is export {
     else {
       if ( $.download-allowed.() ) {
         self.post-log-message( "URL download underway: {$url0}" );
-        $failure-counter.reset( $url0 );
+        $.failure-counter.reset( $url0 );
       }
       else {
         self.post-log-message( "Stopping download due to schedule restriction "
@@ -692,7 +698,7 @@ class Dispatcher is export {
           self.post-log-message( "URL {$url0} finished." );
         }
         self.finish-download( $url0 );
-        $failure-counter.reset( $url0 );
+        $.failure-counter.reset( $url0 );
         %ret<finished> = True;
         return %ret;
       }
@@ -743,7 +749,7 @@ class Dispatcher is export {
         self.post-log-message( "Download eventually failed: {$url0}" );
         $.download-fault-notifier.( "Download failed: {$url0}" );
         self.finish-download( $url0, :failed(True) );
-        $failure-counter.reset( $url0 );
+        $.failure-counter.reset( $url0 );
         return True;
       }
     }
@@ -791,7 +797,7 @@ class Dispatcher is export {
   method register-restart( Str $url ) {
     my enum Action < restart delay abandon >;
     my $ret = restart;
-    my $c = $failure-counter.increment( $url );
+    my $c = $.failure-counter.increment( $url );
     if ( $c == $.failures-before-reschedule + 1 ) {
       $ret = delay;
     }
@@ -859,6 +865,35 @@ class Dispatcher is export {
   }
 }
 
+class StoredStrIntMap-MySQL is StoredStrIntMap {
+  has $.dbh;
+  has $.table-name;
+
+  method set( Str $url, Str $count_expr ) {
+    my $update-sql = Q:c:to/SQL/;
+    update {$.table-name}
+    set current_failures = {$count_expr}
+    where url=?
+    SQL
+
+    my $sth = $.dbh.db.prepare( $update-sql );
+    $sth.execute( $url );
+  }
+
+  method reset( Str $url ) {
+    self.set( $url, '0' );
+  }
+
+  method increment( Str $url ) {
+    self.set( $url, 'current_failures + 1' );
+
+    my @rows = |$.dbh.query(
+      "select current_failures from {$.table-name} where url = ?", $url
+    ).hashes;
+    return @rows[0]<current_failures> if @rows;
+  }
+}
+
 class Dispatcher-MySQL is Dispatcher is export {
 
   has $!dbh;
@@ -890,6 +925,10 @@ class Dispatcher-MySQL is Dispatcher is export {
       $!sth-add-to-queue = $!dbh.db.prepare( Q:c:to/SQL/ );
       insert into {$.queue-tbl} (url, tags) values (?, ?)
       SQL
+
+      $.failure-counter = StoredStrIntMap-MySQL.new(
+        :dbh($!dbh) :table-name($.queue-tbl)
+      );
     }
     else {
       die "Using Dispatcher-MySQL requires DB::MySQL module";
@@ -903,9 +942,10 @@ class Dispatcher-MySQL is Dispatcher is export {
         id int not null primary key auto_increment,
         url varchar(768) not null,
         tags varchar(768),
+        file_size int default 0,
         created datetime default now(),
         first_start datetime,
-        start datetime,
+        started datetime,
         complete datetime,
         failed datetime,
         current_failures int default 0,
@@ -941,5 +981,76 @@ class Dispatcher-MySQL is Dispatcher is export {
       }
     }
     return $added;
+  }
+
+  method next-download() {
+    my @rows = |$!dbh.query( Q:c:to/SQL/ ).hashes;
+    select * from {$.queue-tbl}
+    where complete is null and failed is null
+    order by started desc, first_start, created desc, id desc
+    SQL
+
+    if ( @rows && my %row = @rows[0] ) {
+      if ( %row<started> ) {
+        die "Found current download inside next-download() call";
+      }
+
+      if ( %row<url> ) {
+        return %row<url> ~ ( %row<tags> ?? "\t" ~ %row<tags> !! '' );
+      }
+    }
+
+    self.post-log-message( "Nothing to do" );
+    return;
+  }
+
+  method save-url-as-scheduled( Str $url0, Int $target-size ) {
+    my $update-sql = Q:c:to/SQL/;
+    update {$.queue-tbl}
+    set first_start = ifnull(first_start, now()),
+    started = now(), file_size = ?
+    where url=?
+    SQL
+
+    my $sth = $!dbh.db.prepare( $update-sql );
+    $sth.execute( $target-size, $url0 );
+  }
+
+  # NB: This is implemented as part of save-url-as-scheduled()
+  method remove-url-from-work-queue( Str $url0 ) {}
+
+  method get-current-download() {
+    my @rows = |$!dbh.query(
+      "select * from {$.queue-tbl} where not started is null"
+    ).hashes;
+
+    if @rows.elems > 1 {
+      die "Found more than one current download inside get-current-download()"
+        ~ " call";
+    }
+
+    if @rows.elems > 0 {
+      my %row = @rows[0];
+      return ( %row<url>, %row<file_size>, %row<tags> );
+    }
+
+    return Empty;
+  }
+
+  method finish-download( Str $url, Bool :$failed, Bool :$delay ) {
+
+    if ( $failed && $delay ) {
+      self.post-error-message(
+        Q<Can't use finish-download() with both $failed and $delay params>
+      );
+    }
+
+    my $update-sql = "update {$.queue-tbl} set started = null";
+    $update-sql ~= ', failed = Now()' if $failed;
+    $update-sql ~= ', complete = Now()' if !$failed && !$delay;
+    $update-sql ~= ' where url=?';
+
+    my $sth = $!dbh.db.prepare( $update-sql );
+    $sth.execute( $url );
   }
 }
