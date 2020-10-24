@@ -419,7 +419,6 @@ class TagManager {
         return %.tag-descriptors{$tag}<url-converter>;
       }
     }
-    return;
   }
 
   method get-url-to-file-name() returns Code {
@@ -428,7 +427,6 @@ class TagManager {
         return %.tag-descriptors{$tag}<url-to-file-name>;
       }
     }
-    return;
   }
 
   method get-downloader() returns Download {
@@ -437,7 +435,6 @@ class TagManager {
         return %.tag-descriptors{$tag}<downloader>.clone;
       }
     }
-    return;
   }
 }
 
