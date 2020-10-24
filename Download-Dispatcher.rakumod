@@ -858,3 +858,88 @@ class Dispatcher is export {
     die $msg;
   }
 }
+
+class Dispatcher-MySQL is Dispatcher is export {
+
+  has $!dbh;
+  has $.db-host is rw = '';
+  has $.db-port is rw = 3306;
+  has $.db-name is rw = '';
+  has $.db-user is rw = '';
+  has $.db-password is rw = '';
+
+  has $!sth-add-to-queue;
+
+  has $.queue-tbl is rw = 'download_queue';
+
+  method main() {
+    self.init-db();
+    nextsame;
+  }
+
+  # TODO: Research how not to call from main()
+  method init-db() {
+    try require DB::MySQL;
+    if ( ! $! ) {
+      $!dbh = ::('DB::MySQL').new:
+        :host($.db-host) :port($.db-port) :database($.db-name)
+        :user($.db-user) :password($.db-password)
+      ;
+      self.check-create-tables();
+
+      $!sth-add-to-queue = $!dbh.db.prepare( Q:c:to/SQL/ );
+      insert into {$.queue-tbl} (url, tags) values (?, ?)
+      SQL
+    }
+    else {
+      die "Using Dispatcher-MySQL requires DB::MySQL module";
+    }
+  }
+
+  method check-create-tables() {
+    unless $!dbh.query( "show tables like '{$.queue-tbl}'" ).arrays.elems {
+      $!dbh.execute( Q:c:to/SQL/ );
+      create table {$.queue-tbl} (
+        id int not null primary key auto_increment,
+        url varchar(768) not null,
+        tags varchar(768),
+        created datetime default now(),
+        first_start datetime,
+        start datetime,
+        complete datetime,
+        failed datetime,
+        current_failures int default 0,
+        unique key (url)
+      )
+      SQL
+    }
+  }
+
+  method copy-from-incoming() {
+    my $fn = self.control-file( 'incoming' );
+    my Bool $found-records = False;
+    if ( $fn.IO.e ) {
+      for $fn.IO.lines -> $l {
+        $found-records = True;
+        my ( $url, $tags ) = |$l.split("\t");
+        my $added = self.add-download( $url, $tags );
+        self.post-log-message( "Queued incoming download: {$url}" ) if $added;
+      }
+    }
+    spurt $fn, '' if $found-records;
+  }
+
+  method add-download( Str $url, $tags? ) {
+    my Bool $added = True;
+    try {
+      $!sth-add-to-queue.execute( $url, $tags );
+      CATCH {
+        when .Str ~~ m:i/^ 'duplicate entry' .+? 'for key \'url\''/ {
+          self.post-log-message( "URL {$url} already exists in the queue" );
+          $added = False;
+        }
+      }
+    }
+    return $added;
+  }
+}
