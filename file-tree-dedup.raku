@@ -3,6 +3,7 @@
   Author: Victor Ichalov <ichalov@gmail.com>, 2020-08
 
   TODO:
+    Calculate checksum only if file sizes are equal
     Add option to replace the duplicate files with symlinks to <dir0>
     Unpack tarballs in <dir0> for detailed comparison
     Implement recycled bin - move duplicate files there instead of just deleting
