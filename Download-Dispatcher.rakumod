@@ -11,16 +11,10 @@ use lib <.>;
 use Download-Dispatcher;
 
 my $dl = Wget-Download.new: :limit-rate(102400) :download-dir('.');
-my $d = Dispatcher.new :downloader($dl) :dispatcher-dir('.');
+my $d = Dispatcher-MySQL.new:
+  :downloader($dl) :dispatcher-dir('.')
+  :db-name('download-dispatcher') :db-user('dd');
 
-$d.url-converters<url> = {
-  my $u = @_[0]; $u ~~ s/ \? .+ $ //; $u ~ '';
-}
-$d.url-converters<file-name> = {
-  # convert URL into output file name as the chars between last slash and
-  # subsequent ? or end of string
-  my $u = @_[0]; my $m = $u ~~ m/ ^ .+ \/ (.+?) (\?|$) /; '' ~ $m[0];
-}
 $d.download-allowed = sub {
  my $h = DateTime.now.hour;
  return ( $h >= 2 && $h < 8 );
@@ -39,11 +33,11 @@ $d.main();
 =head2 TODO
 
 =item Add protection against missing system utilities (dependencies check).
+=item Implement priority downloads (starting immediately and moving the current
+at the start of work queue but after other priority)
 =item Explore creating a wrapper over `wget` that renames file into target upon
 successful completion similarly to `youtube-dl`. The script could be simplified
 by removing file size tracking in this case.
-=item Re-test $.take-next-download-wo-delay when no output file name could be
-derived.
 =item Try to perform merge in Download class
 =item Re-check what happens on exceptions
 
@@ -58,6 +52,9 @@ unit module Download-Dispatcher;
 # NB: The main class in this module is Dispatcher. It's located towards bottom
 # of the file because of the dependencies that have to enter earlier.
 
+# NB: Most of the control files are only used in generic Dispatcher. DB-based
+# dispatchers are only supposed to use incoming and hold all other state info
+# in a database table.
 my %dispatcher-storage = (
   incoming => 'incoming.txt',
   work-queue => 'download.txt',
@@ -578,15 +575,14 @@ class Dispatcher is export {
       return False;
     }
 
-    self.save-url-as-scheduled( $url0, $target-size );
-    self.remove-url-from-work-queue( $url0 );
+    self.move-from-queue-to-scheduled( $url0, $target-size );
 
     self.post-log-message( "Scheduled {$url0} for download" );
 
     return True;
   }
 
-  method save-url-as-scheduled( Str $url0, Int $target-size ) {
+  method move-from-queue-to-scheduled( Str $url0, Int $target-size ) {
 
     my $fn = self.control-file( 'downloading' );
     if ( $fn.IO.e && self.get-current-download() ) {
@@ -595,9 +591,7 @@ class Dispatcher is export {
 
     spurt $fn, "{$url0}\t{$target-size}"
              ~ ( $!tm.get-tags() ?? "\t" ~ $!tm.get-tags().join(',') !! '' ) ~ "\n";
-  }
 
-  method remove-url-from-work-queue( Str $url0 ) {
     my $fn0 = self.control-file( 'work-queue' );
 
     if ( ! $fn0.IO.e ) {
@@ -987,7 +981,8 @@ class Dispatcher-MySQL is Dispatcher is export {
     my @rows = |$!dbh.query( Q:c:to/SQL/ ).hashes;
     select * from {$.queue-tbl}
     where complete is null and failed is null
-    order by started desc, first_start, created desc, id desc
+    order by started desc, first_start, created, id
+    limit 1
     SQL
 
     if ( @rows && my %row = @rows[0] ) {
@@ -1004,7 +999,7 @@ class Dispatcher-MySQL is Dispatcher is export {
     return;
   }
 
-  method save-url-as-scheduled( Str $url0, Int $target-size ) {
+  method move-from-queue-to-scheduled( Str $url0, Int $target-size ) {
     my $update-sql = Q:c:to/SQL/;
     update {$.queue-tbl}
     set first_start = ifnull(first_start, now()),
@@ -1015,9 +1010,6 @@ class Dispatcher-MySQL is Dispatcher is export {
     my $sth = $!dbh.db.prepare( $update-sql );
     $sth.execute( $target-size, $url0 );
   }
-
-  # NB: This is implemented as part of save-url-as-scheduled()
-  method remove-url-from-work-queue( Str $url0 ) {}
 
   method get-current-download() {
     my @rows = |$!dbh.query(
