@@ -844,6 +844,12 @@ class Dispatcher is export {
     $.d.merge-in-command-line-switches( $!tm.get-downloader-switches );
   }
 
+  # NB: tm property can't be made public because it participates in a submethod.
+  # This getter is added so that $!tm could be accessed in inherited classes.
+  method get-tm() {
+    return $!tm;
+  }
+
   method control-file ( Str $fid ) {
     return $.dispatcher-dir ~ '/' ~ %dispatcher-storage{ $fid };
   }
@@ -930,23 +936,21 @@ class Dispatcher-MySQL is Dispatcher is export {
   }
 
   method check-create-tables() {
-    unless $!dbh.query( "show tables like '{$.queue-tbl}'" ).arrays.elems {
-      $!dbh.execute( Q:c:to/SQL/ );
-      create table {$.queue-tbl} (
-        id int not null primary key auto_increment,
-        url varchar(768) not null,
-        tags varchar(768),
-        file_size int default 0,
-        created datetime default now(),
-        first_start datetime,
-        started datetime,
-        complete datetime,
-        failed datetime,
-        current_failures int default 0,
-        unique key (url)
-      )
-      SQL
-    }
+    $!dbh.execute( Q:c:to/SQL/ );
+    create table if not exists {$.queue-tbl} (
+      id int not null primary key auto_increment,
+      url varchar(768) not null,
+      tags varchar(768),
+      file_size int default 0,
+      created datetime default now(),
+      first_start datetime,
+      started datetime,
+      complete datetime,
+      failed datetime,
+      current_failures int default 0,
+      unique key (url)
+    )
+    SQL
   }
 
   method copy-from-incoming() {
@@ -978,6 +982,9 @@ class Dispatcher-MySQL is Dispatcher is export {
   }
 
   method next-download() {
+
+    # TODO: In case of $.take-next-download-wo-delay try to use transaction and
+    # 'select for update'
     my @rows = |$!dbh.query( Q:c:to/SQL/ ).hashes;
     select * from {$.queue-tbl}
     where complete is null and failed is null
@@ -1003,12 +1010,14 @@ class Dispatcher-MySQL is Dispatcher is export {
     my $update-sql = Q:c:to/SQL/;
     update {$.queue-tbl}
     set first_start = ifnull(first_start, now()),
-    started = now(), file_size = ?
-    where url=?
+        started = now(), file_size = ?, tags = ?
+    where url = ?
     SQL
 
     my $sth = $!dbh.db.prepare( $update-sql );
-    $sth.execute( $target-size, $url0 );
+    $sth.execute(
+      $target-size, self.get-tm.get-active-tag-list().join(',') || Nil, $url0
+    );
   }
 
   method get-current-download() {
