@@ -903,10 +903,10 @@ class StoredStrIntMap-MySQL is StoredStrIntMap {
   has $.dbh;
   has $.table-name;
 
-  method set( Str $url, Str $count_expr ) {
+  method set( Str $url, Str $count-expr ) {
     my $update-sql = Q:c:to/SQL/;
     update {$.table-name}
-    set current_failures = {$count_expr}
+    set current_failures = {$count-expr}
     where url=?
     SQL
 
