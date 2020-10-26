@@ -32,7 +32,6 @@ $d.main();
 
 =head2 TODO
 
-=item Add protection against missing system utilities (dependencies check).
 =item Implement priority downloads (starting immediately and moving the current
 at the start of work queue but after other priority)
 =item Explore creating a wrapper over `wget` that renames file into target upon
@@ -68,6 +67,13 @@ role Download is export {
 
   has $.download-dir is rw = '.';
 
+  has %.sysutils =
+    'ps' => '/bin/ps',
+    'screen' => '/usr/bin/screen',
+    'kill' => '/bin/kill',
+  ;
+  has Bool $.autostart-called is rw = False;
+
   has @.additional-command-line-switches = Empty;
   has @!initial-command-line-switches = Empty;
 
@@ -76,6 +82,19 @@ role Download is export {
   }
 
   has %.file-params-cache = Empty;
+
+  method sysutils-dependency-check() {
+    my @missing;
+    for %.sysutils.kv -> $cmd, $file {
+      unless $file.IO.e {
+        @missing.append: $cmd;
+      }
+    }
+    if ( @missing ) {
+      die "Can't find required system utilities: "
+        ~ @missing.map({%.sysutils{$_}}).join(', ');
+    }
+  }
 
   method start-download( Str $url, Str $file-name ) {
     die "Abstract method called";
@@ -92,11 +111,19 @@ role Download is export {
   method stop-download( $url ) {
     if ( my $pid = self.download-process-exists( $url ) ) {
       say "Killing pid: {$pid}";
-      run( '/bin/kill', '-9', $pid );
+      run( %.sysutils<kill>, '-9', $pid );
     }
   }
 
   method get-file-params-cached( Str $url ) returns Hash {
+
+    # HACK: This is supposed the first call after initialization to any Download
+    # class so perform autostart here
+    unless ( $.autostart-called ) {
+      self.AUTOSTART();
+      $.autostart-called = True;
+    }
+
     if ( %.file-params-cache{ $url }:exists ) {
       return %.file-params-cache{ $url };
     }
@@ -130,15 +157,19 @@ role Download is export {
   }
 }
 
-# NB: depends on wget, screen and ps.
 class Wget-Download does Download is export {
 
   has $.limit-rate is rw; # in bytes per second
 
   has $!wget = '/usr/bin/wget';
 
+  method AUTOSTART() {
+    %.sysutils<wget> = $!wget;
+    self.sysutils-dependency-check();
+  }
+
   method start-download( $url, $file-name ) {
-    my @cmd = ( '/usr/bin/screen', '-d', '-m', $!wget, '-c' );
+    my @cmd = ( %.sysutils<screen>, '-d', '-m', $!wget, '-c' );
     if ( $.limit-rate ) {
       @cmd.push: "--limit-rate={$.limit-rate}";
     }
@@ -150,7 +181,7 @@ class Wget-Download does Download is export {
   }
 
   method download-process-exists( Str $url ) returns Int {
-    my $proc = run( '/bin/ps', 'auxww', :out );
+    my $proc = run( %.sysutils<ps>, 'auxww', :out );
     my $out = $proc.out.slurp;
 
     if ( $out ~~ self.process-exists-regex( 'wget', $url ) ) {
@@ -181,12 +212,16 @@ class Wget-Download does Download is export {
   }
 }
 
-# NB: depends on youtube-dl, screen and ps.
 class YT-DL-Download does Download is export {
 
   has $.limit-rate is rw; # in bytes per second
 
   has $.youtube-dl = '/usr/bin/youtube-dl';
+
+  method AUTOSTART() {
+    %.sysutils<youtube-dl> = $.youtube-dl;
+    self.sysutils-dependency-check();
+  }
 
   method start-download( $url, $file-name ) {
 
@@ -203,7 +238,7 @@ class YT-DL-Download does Download is export {
       }
     }
 
-    my @cmd = ( '/usr/bin/screen', '-d', '-m', $.youtube-dl );
+    my @cmd = ( %.sysutils<screen>, '-d', '-m', $.youtube-dl );
     if ( $.limit-rate ) {
       @cmd.push: '-r', $.limit-rate;
     }
@@ -215,7 +250,7 @@ class YT-DL-Download does Download is export {
   }
 
   method download-process-exists( Str $url ) returns Int {
-    my $proc = run( '/bin/ps', 'auxww', :out );
+    my $proc = run( %.sysutils<ps>, 'auxww', :out );
     my $out = $proc.out.slurp;
 
     if ( $out ~~ self.process-exists-regex( 'youtube-dl', $url ) ) {
@@ -475,7 +510,6 @@ class Dispatcher is export {
 
   # Redefining this subroutine allows to make dispatcher stop downloads at
   # certain time of day or depending on external process presence.
-  # NB: It depends on 'kill' system utility.
   has Code $.download-allowed is rw = sub { return True; }
 
   # If this is set to True then don't wait until next crontab cycle to schedule
