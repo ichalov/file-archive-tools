@@ -52,8 +52,8 @@ unit module Download-Dispatcher;
 # of the file because of the dependencies that have to enter earlier.
 
 # NB: Most of the control files are only used in generic Dispatcher. DB-based
-# dispatchers are only supposed to use incoming and hold all other state info
-# in a database table.
+# dispatchers are only supposed to use incoming and md5sums (and hold all other
+# state info in a database table).
 my %dispatcher-storage = (
   incoming => 'incoming.txt',
   work-queue => 'download.txt',
@@ -61,6 +61,7 @@ my %dispatcher-storage = (
   restart-counts => 'restart-counts.txt',
   failed => 'failed.txt',
   complete => 'complete.txt',
+  md5sums => 'md5sums.txt',
 );
 
 role Download is export {
@@ -520,6 +521,9 @@ class Dispatcher is export {
     say( "DOWNLOAD FAULT NOTIFICATION: {$msg}" );
   }
 
+  # await() on this in order to get md5sum of just downloaded file saved
+  has $!md5sum-done;
+
   method main() {
     self.copy-from-incoming();
     # The maximum number of actions that can be executed within one crontab
@@ -540,6 +544,10 @@ class Dispatcher is export {
       else {
         last unless self.schedule-next-download();
       }
+    }
+
+    if ( $!md5sum-done ~~ Promise ) {
+      await( $!md5sum-done );
     }
   }
 
@@ -713,9 +721,9 @@ class Dispatcher is export {
       $file-name = $subdir ~ '/' ~ $file-name;
     }
 
-    my $target_fn = $.d.download-dir ~ '/' ~ $file-name;
-    if ( $file-name && $target_fn.IO.e && $target_fn.IO.f ) {
-      my $d_size = $target_fn.IO.s;
+    my $target-fn = $.d.download-dir ~ '/' ~ $file-name;
+    if ( $file-name && $target-fn.IO.e && $target-fn.IO.f ) {
+      my $d_size = $target-fn.IO.s;
       if ( $d_size >= $size ) {
         if ( $d_size > $size ) {
           self.post-log-message( "URL {$url0} download size exceeds estimate "
@@ -727,6 +735,14 @@ class Dispatcher is export {
         }
         self.finish-download( $url0 );
         $.failure-counter.reset( $url0 );
+
+        # Run a parallel process to register the just downloaded file's md5sum
+        my $md5calc = Proc::Async.new( '/usr/bin/md5sum', $target-fn );
+        $md5calc.stdout.tap( -> $buf {
+          spurt self.control-file( 'md5sums' ), $buf, :append
+        } );
+        $!md5sum-done = $md5calc.start;
+
         %ret<finished> = True;
         return %ret;
       }
