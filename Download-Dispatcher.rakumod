@@ -156,6 +156,22 @@ role Download is export {
     my $dir = $.download-dir ~ '/' ~ $subdir;
     mkdir( $dir ) unless ( $dir.IO.d )
   }
+
+  # TODO: Make downloaders save into subdir without chdir()
+  method chdir-into-target( $file-name ) {
+    if ( $file-name ~~ m/ ^ (\w+) \/ / ) {
+      my $dir = $.download-dir ~ '/' ~ $/[0].Str;
+      if ( $dir.IO.d ) {
+        chdir( $dir );
+      }
+    }
+    else {
+      if ( $.download-dir.IO.d ) {
+        chdir( $.download-dir );
+      }
+    }
+  }
+
 }
 
 class Wget-Download does Download is export {
@@ -213,6 +229,82 @@ class Wget-Download does Download is export {
   }
 }
 
+# NB: Use sftp and not scp because it has download continuation (-a option)
+# TODO: Research if rsync can do better
+class SFTP-Download does Download is export {
+
+  has $.limit-rate is rw; # in bytes per second
+
+  has $!sftp = '/usr/bin/sftp';
+
+  method AUTOSTART() {
+    %.sysutils<sftp> = $!sftp;
+    self.sysutils-dependency-check();
+  }
+
+  method host-file-from-url( Str $url ) {
+    # TODO: Make a more reliable regexp
+    if ( $url ~~ m:i/ ^ (\w+) '://' (.+?) ':' (.+) / ) {
+      if ( ! $/[0].lc eq any( 'scp', 'sftp' ) ) {
+        die "SFTP-Download can only process scp:// or sftp://";
+      }
+      return %( 'host' => $/[1].Str, 'file' => $/[2].Str );
+    }
+  }
+
+  method start-download( $url, $file-name ) {
+
+    self.chdir-into-target( $file-name );
+
+    my @cmd = ( %.sysutils<screen>, '-d', '-m', $!sftp, '-a' );
+    if ( $.limit-rate ) {
+      my $kbits-per-sec = ( $.limit-rate / 128 ).round();
+      @cmd.push: '-l', $kbits-per-sec;
+    }
+    if ( @.additional-command-line-switches ) {
+      @cmd.append: @.additional-command-line-switches;
+    }
+    my %hf = self.host-file-from-url( $url );
+    @cmd.push: %hf<host> ~ ':' ~ %hf<file>;
+    run( @cmd );
+  }
+
+  method download-process-exists( Str $url ) returns Int {
+    my $proc = run( %.sysutils<ps>, 'auxww', :out );
+    my $out = $proc.out.slurp;
+
+    my %hf = self.host-file-from-url( $url );
+    my $url-part = %hf<host> ~ ':' ~ %hf<file>;
+
+    if ( $out ~~ self.process-exists-regex( 'sftp', $url-part ) ) {
+      return $/[0].Int;
+    }
+    return 0;
+  }
+
+  method get-file-params( Str $url ) returns Hash {
+
+    my %hf = self.host-file-from-url( $url );
+    my $proc = run(
+      $!sftp, |@.additional-command-line-switches, %hf<host>, :out, :err, :in
+    );
+    $proc.in.print: "ls -l {%hf<file>}\nexit\n";
+    my $out = $proc.out.slurp;
+
+    # TODO: Make a more reliable regexp
+    if ( $out ~~ m/ ^^ [\S+\s+]**4 (\d+) .+? {%hf<file>} \s* $$ / ) {
+      my %ret;
+      %ret<size-bytes> = $/[0].Int;
+      %ret<file-name> = %hf<file>;
+      %ret<file-name> ~~ s:i/ .+ '/' //;
+      return %ret;
+    }
+    else {
+      return %();
+    }
+  }
+}
+
 class YT-DL-Download does Download is export {
 
   has $.limit-rate is rw; # in bytes per second
@@ -226,18 +318,7 @@ class YT-DL-Download does Download is export {
 
   method start-download( $url, $file-name ) {
 
-    # TODO: Make youtube-dl save into subdir without chdir()
-    if ( $file-name ~~ m/ ^ (\w+) \/ / ) {
-      my $dir = $.download-dir ~ '/' ~ $/[0].Str;
-      if ( $dir.IO.d ) {
-        chdir( $dir );
-      }
-    }
-    else {
-      if ( $.download-dir.IO.d ) {
-        chdir( $.download-dir );
-      }
-    }
+    self.chdir-into-target( $file-name );
 
     my @cmd = ( %.sysutils<screen>, '-d', '-m', $.youtube-dl );
     if ( $.limit-rate ) {
