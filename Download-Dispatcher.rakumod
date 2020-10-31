@@ -32,8 +32,7 @@ $d.main();
 
 =head2 TODO
 
-=item Implement priority downloads (starting immediately and moving the current
-at the start of work queue but after other priority)
+=item Implement priority levels
 =item Explore creating a wrapper over `wget` that renames file into target upon
 successful completion similarly to `youtube-dl`. The script could be simplified
 by removing file size tracking in this case.
@@ -118,8 +117,8 @@ role Download is export {
 
   method get-file-params-cached( Str $url ) returns Hash {
 
-    # HACK: This is supposed the first call after initialization to any Download
-    # class so perform autostart here
+    # HACK: This is supposed to be the first call after initialization to any
+    # Download class so perform autostart here
     unless ( $.autostart-called ) {
       self.AUTOSTART();
       $.autostart-called = True;
@@ -598,6 +597,8 @@ class Dispatcher is export {
   # next download and start it from schedule immediately as well.
   has Bool $.take-next-download-wo-delay = True;
 
+  has Str $.priority-tag = 'priority';
+
   has Code $.download-fault-notifier is rw = sub ( Str $msg ) {
     say( "DOWNLOAD FAULT NOTIFICATION: {$msg}" );
   }
@@ -618,8 +619,12 @@ class Dispatcher is export {
     loop ( my $i = 0; $i < ( $.take-next-download-wo-delay ?? 3 !! 1 ); $i++ ) {
       my @cur = self.get-current-download();
       if ( @cur ) {
-        $!tm.set-tags( @cur[0], ( @cur[2] || '' ).split(',') );
-        self.assign-downloader();
+        repeat {
+          # NB: Need to reset tags in case of switch to priority
+          $!tm.set-tags( Empty );
+          $!tm.set-tags( @cur[0], ( @cur[2] || '' ).split(',') );
+          self.assign-downloader();
+        } while self.check-switch-priority( @cur ); # NB: this may change @cur
         last unless self.check-restart-download( @cur[0], @cur[1].Int );
       }
       else {
@@ -665,15 +670,47 @@ class Dispatcher is export {
     spurt $fn, "{$url}\n", :append;
   }
 
-  method next-download() {
-    my $fn = self.control-file( 'work-queue' );
-    if ( $fn.IO.e ) {
-      for $fn.IO.lines -> $url {
-        return $url if ( $url && $url !~~ m/^\s*\#/ );
+  method check-switch-priority( @cur ) {
+    my @tags = $!tm.get-active-tag-list;
+    unless ( $.priority-tag eq any( @tags ) ) {
+      if ( my @priority = self.next-download( :priority-only(True) ) ) {
+        my $cur_url = @cur[0];
+        self.post-log-message( "Switch current {$cur_url} download to "
+                             ~ @priority[0] ~ '.' );
+        $.d.stop-download( self.convert-url( $cur_url ) );
+        self.finish-download( $cur_url, :push(True) );
+        self.schedule-download( @priority.join("\t") );
+        @cur = self.get-current-download();
+        return True;
       }
     }
-    self.post-log-message( "Nothing to do" );
-    return;
+    return False;
+  }
+
+  method next-download( Bool :$priority-only ) {
+    my $fn = self.control-file( 'work-queue' );
+    if ( $fn.IO.e ) {
+      my @normal;
+      my @priority;
+      for $fn.IO.lines -> $url {
+        if ( $url && $url !~~ m/^\s*\#/ ) {
+          if ( $url ~~ m/^\T+\t\T*<wb>priority<wb>/ ) {
+            @priority.append: $url;
+          }
+          else {
+            @normal.append: $url;
+          }
+        }
+      }
+      if ( @priority.elems ) {
+        return @priority[0];
+      }
+      elsif( @normal.elems && ! $priority-only ) {
+        return @normal[0];
+      }
+    }
+    self.post-log-message( "Nothing to do" ) unless $priority-only;
+    return Empty;
   }
 
   method schedule-download( Str $url-ext ) returns Bool {
@@ -880,11 +917,12 @@ class Dispatcher is export {
     }
   }
 
-  method finish-download( Str $url, Bool :$failed, Bool :$delay ) {
+  method finish-download( Str $url, Bool :$failed, Bool :$delay, Bool :$push ) {
 
-    if ( $failed && $delay ) {
+    if ( ( $failed, $delay, $push ).grep({$_}).elems > 1 ) {
       self.post-error-message(
-        Q<Can't use finish-download() with both $failed and $delay params>
+        Q<Can't use finish-download() with more than one of $failed, $delay >
+      ~ Q<or $push params set>
       );
     }
 
@@ -893,7 +931,7 @@ class Dispatcher is export {
     if ( $failed ) {
       $fn = self.control-file( 'failed' );
     }
-    if ( $delay ) {
+    if ( $delay || $push ) {
       $fn = self.control-file( 'work-queue' );
     }
 
@@ -906,11 +944,17 @@ class Dispatcher is export {
     my $l = $fn0.IO.lines[0];
     if ( $l ~~ m:i/ $url / ) {
       # Don't copy file size into work queue, but copy previously saved tags
-      if ( $delay ) {
+      if ( $delay || $push ) {
         my @tgs = $!tm.get-tags();
         $l = $url ~ ( @tgs ?? "\t" ~ @tgs.join(',') !! '' );
       }
-      spurt $fn, $l ~ "\n", :append;
+      if ( ! $push ) {
+        spurt $fn, $l ~ "\n", :append;
+      }
+      else {
+        my $cont = $fn.IO.slurp;
+        spurt $fn, $l ~ "\n" ~ $cont;
+      }
       spurt $fn0, '';
     }
     else {
@@ -1076,12 +1120,24 @@ class Dispatcher-MySQL is Dispatcher is export {
       created datetime default now(),
       first_start datetime,
       started datetime,
+      pushed datetime,
       complete datetime,
       failed datetime,
       current_failures int default 0,
       unique key (url)
     )
     SQL
+
+    # Migration after implementing priority tag
+    unless
+      $!dbh.query( "show columns from {$.queue-tbl} like 'pushed'" )
+        .arrays.elems
+    {
+      $!dbh.execute( Q:c:to/SQL/ );
+      alter table {$.queue-tbl}
+      add pushed datetime after started
+      SQL
+    }
   }
 
   method copy-from-incoming() {
@@ -1112,16 +1168,33 @@ class Dispatcher-MySQL is Dispatcher is export {
     return $added;
   }
 
-  method next-download() {
+  method next-download( Bool :$priority-only ) {
 
-    # TODO: In case of $.take-next-download-wo-delay try to use transaction and
-    # 'select for update'
-    my @rows = |$!dbh.query( Q:c:to/SQL/ ).hashes;
-    select * from {$.queue-tbl}
-    where complete is null and failed is null
-    order by started desc, first_start, created, id
-    limit 1
-    SQL
+    my @rows;
+    my $priority-expr =
+      "if(concat(',', tags, ',') like concat('%,', ?, ',%'),1,2)";
+    if ( $priority-only ) {
+      @rows = |$!dbh.query( Q:c:to/SQL/, $.priority-tag ).hashes;
+      select * from {$.queue-tbl}
+      where complete is null and failed is null and started is null
+      and {$priority-expr} = 1
+      order by
+        pushed desc, first_start, created, id
+      limit 1
+      SQL
+    }
+    else {
+      # TODO: In case of $.take-next-download-wo-delay try to use transaction and
+      # 'select for update'
+      @rows = |$!dbh.query( Q:c:to/SQL/, $.priority-tag ).hashes;
+      select * from {$.queue-tbl}
+      where complete is null and failed is null
+      order by started desc,
+        {$priority-expr},
+        pushed desc, first_start, created, id
+      limit 1
+      SQL
+    }
 
     if ( @rows && my %row = @rows[0] ) {
       if ( %row<started> ) {
@@ -1133,8 +1206,8 @@ class Dispatcher-MySQL is Dispatcher is export {
       }
     }
 
-    self.post-log-message( "Nothing to do" );
-    return;
+    self.post-log-message( "Nothing to do" ) unless $priority-only;
+    return Empty;
   }
 
   method move-from-queue-to-scheduled( Str $url0, Int $target-size ) {
@@ -1169,17 +1242,19 @@ class Dispatcher-MySQL is Dispatcher is export {
     return Empty;
   }
 
-  method finish-download( Str $url, Bool :$failed, Bool :$delay ) {
+  method finish-download( Str $url, Bool :$failed, Bool :$delay, Bool :$push ) {
 
-    if ( $failed && $delay ) {
+    if ( ( $failed, $delay, $push ).grep({$_}).elems > 1 ) {
       self.post-error-message(
-        Q<Can't use finish-download() with both $failed and $delay params>
+        Q<Can't use finish-download() with more than one of $failed, $delay >
+      ~ Q<or $push params set>
       );
     }
 
     my $update-sql = "update {$.queue-tbl} set started = null";
     $update-sql ~= ', failed = Now()' if $failed;
-    $update-sql ~= ', complete = Now()' if !$failed && !$delay;
+    $update-sql ~= ', pushed = Now()' if $push;
+    $update-sql ~= ', complete = Now()' if !$failed && !$delay && !$push;
     $update-sql ~= ' where url=?';
 
     my $sth = $!dbh.db.prepare( $update-sql );
