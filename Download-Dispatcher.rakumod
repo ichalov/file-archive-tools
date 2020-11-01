@@ -25,6 +25,11 @@ $d.tag-descriptors = (
     'downloader' => Wget-Download.new( :limit-rate(153600) ),
     'subdir' => 'distr'
   ),
+  'vimeo' => %(
+    'url-regexps' => ( rx:i/ https? '://vimeo.' /, ),
+    'downloader' => Vimeo-Download.new( :limit-rate(51200) ),
+    'subdir' => 'video',
+  ),
 );
 
 $d.main();
@@ -418,6 +423,24 @@ class YT-DL-Download does Download is export {
       else {
         %ret<file-name> = '';
       }
+      %ret<size-bytes> = 0;
+    }
+    return %ret;
+  }
+}
+
+class Vimeo-Download is YT-DL-Download is export {
+
+  method get-file-params( Str $url ) returns Hash {
+
+    use JSON::Tiny;
+
+    my %ret = Empty;
+
+    self.chdir-into-target( '' );
+
+    if ( my ( $json ) = self.get-json( $url ) ) {
+      %ret<file-name> = $json<_filename>;
       %ret<size-bytes> = 0;
     }
     return %ret;
