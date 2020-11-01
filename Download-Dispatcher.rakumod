@@ -340,23 +340,15 @@ class YT-DL-Download does Download is export {
     return 0;
   }
 
-  method get-file-params( Str $url ) returns Hash {
+  method get-json( Str $url ) {
 
     use JSON::Tiny;
-
-    if ( $.download-dir.IO.d ) {
-      chdir( $.download-dir );
-    }
-    else {
-      die( "Can't open download dir: {$.download-dir}" );
-    }
 
     my $proc = run(
       $.youtube-dl, |@.additional-command-line-switches,
       '--write-info-json', '--skip-download', $url, :out
     );
     my $out = $proc.out.slurp;
-    my %ret = Empty;
     my $json-file-name;
     if ( $out ~~ m:i/
       ^^ '[info] Writing video description metadata as JSON to: ' \s* (.+) $$
@@ -364,6 +356,23 @@ class YT-DL-Download does Download is export {
       $json-file-name = $/[0].Str;
       my $json = from-json( $json-file-name.IO.slurp );
 
+      if ( $json-file-name && $json-file-name.IO.f ) {
+        $json-file-name.IO.unlink;
+      }
+
+      return ( $json, $json-file-name );
+    }
+  }
+
+  method get-file-params( Str $url ) returns Hash {
+
+    use JSON::Tiny;
+
+    my %ret = Empty;
+
+    self.chdir-into-target( '' );
+
+    if ( my ( $json, $json-file-name ) = self.get-json( $url ) ) {
       # NB: youtube-dl names the file with .part suffix while downloading and
       # renames it into target only after completion. So Dispatcher is not able
       # to identify abandoned download by seeing incomplete file. It will just
@@ -410,9 +419,6 @@ class YT-DL-Download does Download is export {
         %ret<file-name> = '';
       }
       %ret<size-bytes> = 0;
-    }
-    if ( $json-file-name && $json-file-name.IO.f ) {
-      $json-file-name.IO.unlink;
     }
     return %ret;
   }
