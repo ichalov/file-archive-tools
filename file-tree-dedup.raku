@@ -3,7 +3,6 @@
   Author: Victor Ichalov <ichalov@gmail.com>, 2020-08
 
   TODO:
-    Calculate checksum only if file sizes are equal
     Add option to replace the duplicate files with symlinks to <dir0>
     Unpack tarballs in <dir0> for detailed comparison
     Implement recycled bin - move duplicate files there instead of just deleting
@@ -101,6 +100,8 @@ sub MAIN(
           } );
         }
 
+        # NB: The shortcut with file size comparison is not possible here
+        # because the <dir0> file to compare with is not definite yet.
         my $checksum = get-file-checksum( $b );
         if ( %dir0-checksums{ $checksum }:exists ) {
           # Prefer showing in logs the file that has the same basename
@@ -117,10 +118,11 @@ sub MAIN(
       }
     !!
       -> $a, $b {
-        # Compare the files in <dir0> and <dir>. Use different defaults for
-        # both calculations to prevent removals if get-file-checksum() returns
-        # empty value.
-        if ( $a.IO.f ) {
+        # Compare the files in <dir0> and <dir>. First compare sizes and then
+        # proceed to checksum only if sizes are equal. When calculating
+        # checksums, use different defaults for both calculations to prevent
+        # removals if get-file-checksum() returns empty value.
+        if ( $a.IO.f && $a.IO.s == $b.IO.s ) {
           my $cs = get-file-checksum( $b ) || '--';
           my $cs_0 = get-file-checksum( $a ) || '---';
           if ( $cs_0 eq $cs ) {
