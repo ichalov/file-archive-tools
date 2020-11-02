@@ -38,11 +38,6 @@ $d.main();
 =head2 TODO
 
 =item Implement priority levels
-=item Explore creating a wrapper over `wget` that renames file into target upon
-successful completion similarly to `youtube-dl`. The script could be simplified
-by removing file size tracking in this case.
-=item Try to perform merge in Download class
-=item Re-check what happens on exceptions
 
 =head2 AUTHOR
 
@@ -345,13 +340,15 @@ class YT-DL-Download does Download is export {
     return 0;
   }
 
-  method get-json( Str $url ) {
+  method get-file-params( Str $url ) returns Hash {
 
-    use JSON::Tiny;
+    my %ret = Empty;
+
+    self.chdir-into-target( '' );
 
     my $proc = run(
       $.youtube-dl, |@.additional-command-line-switches,
-      '--write-info-json', '--skip-download', $url, :out
+      '--write-info-json', '--skip-download', $url, :out, :err
     );
     my $out = $proc.out.slurp;
     my $json-file-name;
@@ -359,25 +356,22 @@ class YT-DL-Download does Download is export {
       ^^ '[info] Writing video description metadata as JSON to: ' \s* (.+) $$
     / ) {
       $json-file-name = $/[0].Str;
-      my $json = from-json( $json-file-name.IO.slurp );
 
       if ( $json-file-name && $json-file-name.IO.f ) {
+        %ret = self.parse-json( $json-file-name.IO.slurp, $json-file-name );
         $json-file-name.IO.unlink;
       }
-
-      return ( $json, $json-file-name );
     }
+    return %ret;
   }
 
-  method get-file-params( Str $url ) returns Hash {
+  method parse-json( Str $json-text, Str $json-file-name ) {
 
     use JSON::Tiny;
 
     my %ret = Empty;
 
-    self.chdir-into-target( '' );
-
-    if ( my ( $json, $json-file-name ) = self.get-json( $url ) ) {
+    if ( my $json = from-json( $json-text ) ) {
       # NB: youtube-dl names the file with .part suffix while downloading and
       # renames it into target only after completion. So Dispatcher is not able
       # to identify abandoned download by seeing incomplete file. It will just
@@ -431,15 +425,13 @@ class YT-DL-Download does Download is export {
 
 class Vimeo-Download is YT-DL-Download is export {
 
-  method get-file-params( Str $url ) returns Hash {
+  method parse-json( Str $json-text, Str $json-file-name ) {
 
     use JSON::Tiny;
 
     my %ret = Empty;
 
-    self.chdir-into-target( '' );
-
-    if ( my ( $json ) = self.get-json( $url ) ) {
+    if ( my $json = from-json( $json-text ) ) {
       %ret<file-name> = $json<_filename>;
       %ret<size-bytes> = 0;
     }
@@ -723,7 +715,8 @@ class Dispatcher is export {
       my @priority;
       for $fn.IO.lines -> $url {
         if ( $url && $url !~~ m/^\s*\#/ ) {
-          if ( $url ~~ m/^\T+\t\T*<wb>priority<wb>/ ) {
+          my $priority-tag = $.priority-tag;
+          if ( $url ~~ m/^\T+\t\T*<wb> $priority-tag <wb>/ ) {
             @priority.append: $url;
           }
           else {
