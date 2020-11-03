@@ -30,6 +30,9 @@ $d.tag-descriptors = (
     'downloader' => Vimeo-Download.new( :limit-rate(51200) ),
     'subdir' => 'video',
   ),
+  'priority' => %(
+    'url-regexps' => ( rx:i/ '.iso' $ /, ),
+  ),
 );
 
 $d.main();
@@ -671,7 +674,12 @@ class Dispatcher is export {
     if ( $fn.IO.e ) {
       for $fn.IO.lines -> $l {
         self.post-log-message( "Queueing incoming download: {$l}" );
-        $cont ~= $l ~ "\n";
+        if ( $l ~~ m/ ^ (.+?) [ \t (.+?) ]? $ / ) {
+          my ( $url, $tags ) = |$/.map({ .Str }).grep({$_});
+          $!tm.set-tags( Empty );
+          $!tm.set-tags( $url, ( $tags || '' ).split(',').grep({$_}) );
+          $cont ~= "{$url}\t{$!tm.get-active-tag-list.join(',')}\n";
+        }
       }
     }
     spurt self.control-file( 'work-queue' ), $cont, :append;
@@ -1169,7 +1177,11 @@ class Dispatcher-MySQL is Dispatcher is export {
       for $fn.IO.lines -> $l {
         $found-records = True;
         my ( $url, $tags ) = |$l.split("\t");
-        my $added = self.add-download( $url, $tags );
+        self.get-tm.set-tags( Empty );
+        self.get-tm.set-tags( $url, ( $tags || '' ).split(',').grep({$_}) );
+        my $added = self.add-download(
+          $url, self.get-tm.get-active-tag-list.join(',')
+        );
         self.post-log-message( "Queued incoming download: {$url}" ) if $added;
       }
     }
