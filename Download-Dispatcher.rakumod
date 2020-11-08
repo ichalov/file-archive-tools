@@ -74,8 +74,8 @@ role Download is export {
     'ps' => '/bin/ps',
     'screen' => '/usr/bin/screen',
     'kill' => '/bin/kill',
+    'md5sum' => '/usr/bin/md5sum',
   ;
-  has Bool $.autostart-called is rw = False;
 
   has @.additional-command-line-switches = Empty;
   has @!initial-command-line-switches = Empty;
@@ -85,6 +85,10 @@ role Download is export {
   }
 
   has %.file-params-cache = Empty;
+
+  method new() {
+    with callsame() { $_.AUTOSTART(); $_; }
+  }
 
   method sysutils-dependency-check() {
     my @missing;
@@ -119,13 +123,6 @@ role Download is export {
   }
 
   method get-file-params-cached( Str $url ) returns Hash {
-
-    # HACK: This is supposed to be the first call after initialization to any
-    # Download class so perform autostart here
-    unless ( $.autostart-called ) {
-      self.AUTOSTART();
-      $.autostart-called = True;
-    }
 
     if ( %.file-params-cache{ $url }:exists ) {
       return %.file-params-cache{ $url };
@@ -885,7 +882,7 @@ class Dispatcher is export {
         $.failure-counter.reset( $url0 );
 
         # Run a parallel process to register the just downloaded file's md5sum
-        my $md5calc = Proc::Async.new( '/usr/bin/md5sum', $target-fn );
+        my $md5calc = Proc::Async.new( $.d.sysutils<md5sum>, $target-fn );
         $md5calc.stdout.tap( -> $buf {
           spurt self.control-file( 'md5sums' ), $buf, :append
         } );
