@@ -106,13 +106,29 @@ sub check-combination( @base, @tail, $base-size ) {
         -> $disc
     {
       my $limit = %container-size-limits{$disc};
-      if ( $base-size <= $limit && $new-size > $limit ) {
+
+      # Include the file selections that are within 5% below the limit even if
+      # there's no additional file that brings selection size above the limit.
+      # This allows to produce output if the sum of all input file sizes is only
+      # slightly smaller than disc size.
+      if ( $base-size <= $limit && $new-size > 0.95 * $limit ) {
 #        say $disc ~ '|' ~ @base.join: '|'; # DIAG
+
+        my @selection;
+        my $selection-size;
+        if ( $new-size > $limit ) {
+          @selection = @base;
+          $selection-size = $base-size;
+        }
+        else {
+          @selection = ( @base, $base-add ).flat;
+          $selection-size = $new-size;
+        }
 
         # TODO: Decrease %file-sets size by filtering out candidates that have
         # little chance of getting into final report ($limit - $base-size is too
         # big).
-        %file-sets{$disc ~ '|' ~ @base.sort.join: '|'} = $base-size;
+        %file-sets{$disc ~ '|' ~ @selection.sort.join: '|'} = $selection-size;
 
         # Don't check any further combinations if the current $limit is achieved
         # with more than 2 files. Only make this shortcut if --speedups option
