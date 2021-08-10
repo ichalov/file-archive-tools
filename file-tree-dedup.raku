@@ -91,16 +91,18 @@ sub MAIN(
 
     # Use different $proc functions depending on --any-place.
     $any-place ??
-      -> $a, $b {
+      sub ( $a, $b ) {
         # Calculate the whole list of <dir0> checksums and full paths on first
         # invocation.
+        my Bool $files-deleted = False;
         if ( ! %dir0-checksums ) {
-          process-sub-dir( $d0, '', -> $aa, $bb {
+          process-sub-dir( $d0, '', sub ( $aa, $bb ) {
             my $checksum = get-file-checksum( $bb );
             # Save file names as a list because there may be several files with
             # the same checksum under <dir0>
             push %dir0-checksums{ $checksum }, $bb;
             %dir0-full-paths{ $bb.IO.resolve(:completely).Str } = $bb;
+            return False;
           } );
         }
 
@@ -117,24 +119,29 @@ sub MAIN(
           }
           if ( delete-file( $b, $checksum ) ) {
             say "{$b} -> remove ( { $src-file-name } )" if $_verbose;
+            $files-deleted = True;
           }
         }
+        return $files-deleted;
       }
     !!
-      -> $a, $b {
+      sub ( $a, $b ) {
         # Compare the files in <dir0> and <dir>. First compare sizes and then
         # proceed to checksum only if sizes are equal. When calculating
         # checksums, use different defaults for both calculations to prevent
         # removals if get-file-checksum() returns empty value.
+        my Bool $files-deleted = False;
         if ( $a.IO.f && $a.IO.s == $b.IO.s ) {
           my $cs = get-file-checksum( $b ) || '--';
           my $cs_0 = get-file-checksum( $a ) || '---';
           if ( $cs_0 eq $cs ) {
             if ( delete-file( $b ) ) {
               say "{$b} -> remove" if $_verbose;
+              $files-deleted = True;
             }
           }
         }
+        return $files-deleted;
       },
 
     :delete-dir-if-empty( &delete-dir-if-empty ),
@@ -164,6 +171,8 @@ sub process-sub-dir(
   Code :$delete-dir-if-empty?, Code :$dir-symlink-checks?,
 ) {
   my $dir = $root-dir ~ $sub-dir;
+
+  my Bool $files-deleted;
   for $dir.IO.dir -> $fn0 {
     my $fn = $fn0.basename;
     my $fns = $sub-dir ?? $sub-dir ~ '/' ~ $fn !! $fn;
@@ -178,21 +187,26 @@ sub process-sub-dir(
         }
       }
 
-      process-sub-dir( $root-dir, $fns, $proc,
+      my $fd = process-sub-dir( $root-dir, $fns, $proc,
         :delete-dir-if-empty( $delete-dir-if-empty ),
         :dir-symlink-checks( $dir-symlink-checks ),
       );
+      $files-deleted ||= $fd;
     }
     elsif ( $fnf.IO.f ) {
-      &$proc( $fnf0, $fnf );
+      my $fd = &$proc( $fnf0, $fnf );
+      $files-deleted ||= $fd;
     }
   }
 
   # Delete current dir or dir symlink if it turns out to be empty after the
   # removals in $proc .
-  if ( $delete-dir-if-empty ) {
-    $delete-dir-if-empty( $dir );
+  if ( $delete-dir-if-empty && $files-deleted ) {
+    if ( $delete-dir-if-empty( $dir ) ) {
+      return True;
+    }
   }
+  return False;
 }
 
 # Perform additional checks before calling unlink() on any files.
@@ -215,8 +229,9 @@ sub delete-file ( Str $fnf, Str $checksum? ) {
   # which is symlinked from both. But also can prevent deleting file from
   # <dir> that is symlinked from <dir0>.
   unless ( %dir0-full-paths ) {
-    process-sub-dir( $d0, '', -> $aa, $bb {
+    process-sub-dir( $d0, '', sub ( $aa, $bb ) {
       %dir0-full-paths{ $bb.IO.resolve(:completely).Str } = $bb;
+      return False;
     } );
   }
   if ( %dir0-full-paths{ $fnf.IO.resolve(:completely).Str }:exists ) {
@@ -255,6 +270,7 @@ sub delete-file ( Str $fnf, Str $checksum? ) {
 
 sub delete-dir-if-empty( Str $_dir ) {
   my $dir = $_dir;
+  my Bool $deletion-performed = False;
   # Only delete current dir if it turns out to be empty after the removals
   # in $proc calls in process-sub-dir() .
   # Only do that if $dir doesn't contain $d0 to prevent deleting empty
@@ -269,13 +285,17 @@ sub delete-dir-if-empty( Str $_dir ) {
         say "{$dir} -> remove symlink to empty dir" if $_verbose;
         # Also delete the linked dir
         $dir = $linked-dir;
+        $deletion-performed = True;
       }
     }
     my @deleted-dirs = rmdir( $dir );
     if ( $dir eq any( @deleted-dirs ) ) {
       say "{$dir} -> rmdir" if $_verbose;
+      $deletion-performed = True;
     }
   }
+
+  return $deletion-performed;
 }
 
 sub dir-symlink-checks( Str $fnf ) {
