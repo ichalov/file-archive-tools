@@ -31,6 +31,7 @@ my $script-description = Q:c:to/EOT/;
       files or the whole linked directory (even if it's outside <dir>) in case
       the files are identical to the contained under <dir0>. But it won't delete
       any files or dirs under <dir0> or linked from <dir0>.
+    --shred - use shred command when deleting files (instead of just unlinking).
     --silent - Don't print logs of script actions on STDOUT.
   EOT
 
@@ -48,6 +49,7 @@ my Bool $_verbose;
 my Bool $_any-basename;
 my Bool $_keep-file-symlinks;
 my Bool $_process-dir-symlinks;
+my Bool $_shred;
 
 # Global hashes for checksums and full paths after dereferencing symlinks of files
 # under <dir0> .
@@ -61,6 +63,7 @@ sub MAIN(
   Bool :$any-basename,
   Bool :$keep-file-symlinks,
   Bool :$process-dir-symlinks,
+  Bool :$shred,
   Bool :$silent,
 ) {
   $d0 = append-slash-to-dir( $dir0 );
@@ -77,6 +80,7 @@ sub MAIN(
   $_verbose = ! $silent;
   $_keep-file-symlinks = $keep-file-symlinks;
   $_process-dir-symlinks = $process-dir-symlinks;
+  $_shred = $shred;
 
   $_any-basename = $any-basename;
   if ( $any-basename && ! $any-place ) {
@@ -239,7 +243,13 @@ sub delete-file ( Str $fnf, Str $checksum? ) {
       return False;
     }
   }
-  unlink( $fnf );
+
+  if ( ! $_shred ) {
+    unlink( $fnf );
+  }
+  else {
+    run( '/usr/bin/shred', '-un2', $fnf );
+  }
   return True;
 }
 
