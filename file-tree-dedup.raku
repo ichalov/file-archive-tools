@@ -92,11 +92,21 @@ sub MAIN(
     # Use different $proc functions depending on --any-place.
     $any-place ??
       sub ( $a, $b ) {
+        CATCH {
+          when is-io-exception( .Str ) {
+            say "IO fault while comparing {$b}";
+          }
+        }
         # Calculate the whole list of <dir0> checksums and full paths on first
         # invocation.
         my Bool $files-deleted = False;
         if ( ! %dir0-checksums ) {
           process-sub-dir( $d0, '', sub ( $aa, $bb ) {
+            CATCH {
+              when is-io-exception( .Str ) {
+                say "IO fault while accessing {$bb}";
+              }
+            }
             my $checksum = get-file-checksum( $bb );
             # Save file names as a list because there may be several files with
             # the same checksum under <dir0>
@@ -132,6 +142,11 @@ sub MAIN(
         # removals if get-file-checksum() returns empty value.
         my Bool $files-deleted = False;
         if ( $a.IO.f && $a.IO.s == $b.IO.s ) {
+          CATCH {
+            when is-io-exception( .Str ) {
+              say "IO fault while comparing {$a}";
+            }
+          }
           my $cs = get-file-checksum( $b ) || '--';
           my $cs_0 = get-file-checksum( $a ) || '---';
           if ( $cs_0 eq $cs ) {
@@ -195,7 +210,7 @@ sub process-sub-dir(
     }
     elsif ( $fnf.IO.f ) {
       my $fd = &$proc( $fnf0, $fnf );
-      $files-deleted ||= $fd;
+      $files-deleted ||= ( $fd // False );
     }
   }
 
@@ -336,6 +351,7 @@ sub get-file-checksum( Str $file-name ) returns Str {
 sub file_md5_hex ( Str $file-name ) returns Str {
   try require Digest::MD5;
   if ( ! $! ) {
+    # TODO: Need to call .slurp( :bin ), but it causes big memory allocations.
     return ::('Digest::MD5').new.md5_hex: $file-name.IO.slurp;
   }
 
@@ -355,4 +371,10 @@ sub file_md5_hex ( Str $file-name ) returns Str {
   else {
     die "Error calculating md5sum for {$file-name}";
   }
+}
+
+sub is-io-exception( Str $e ) {
+  return True if ( $e ~~ m:i/ 'Error calculating md5sum for' / );
+  # TODO: Include identification for Digest::MD5 errors
+  return False;
 }
