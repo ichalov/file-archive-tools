@@ -15,7 +15,9 @@ my $script-description = Q:c:to/EOT/;
 
   This script removes files under <dir> that also exist under <dir0>.
   It handles <dir> recursively and deletes files only if their copies are placed
-  in exactly same subdir of <dir0>.
+  in exactly same subdir of <dir0>. <dir0> may be given as "list:<filename>"
+  where <filename> points to a text file containing output of a command like
+        $ find . -type f -exec md5sum {'{}'} \;
   Options:
     --any-place - Relaxes the requirement of the same position and deletes file
       from <dir> if the file with same checksum is found anywhere under <dir0>
@@ -57,6 +59,9 @@ my Bool $_shred;
 my %dir0-checksums = Empty;
 my %dir0-full-paths = Empty;
 
+# Global hash to keep the list of files and checksums from dir0 = list: argument
+my %dir0-list = Empty;
+
 sub MAIN(
   Str $dir0, Str $dir,
   Bool :$any-place,
@@ -66,11 +71,21 @@ sub MAIN(
   Bool :$shred,
   Bool :$silent,
 ) {
-  $d0 = append-slash-to-dir( $dir0 );
-  unless ( $d0.IO.d ) {
-    die "Can't find directory {$d0}";
+  if ( my $fno = $dir0 ~~ m/ ^ \s* 'list:' (.+) / ) {
+    my $fn = $fno[0].Str;
+    unless ( $fn.IO.f ) {
+      die "Can't find source file {$fn}";
+    }
+    $d0 = './';
+    %dir0-list = read-find-checksum-file( $fn );
   }
-  $d0-full = append-slash-to-dir( $d0.IO.resolve(:completely).Str );
+  else {
+    $d0 = append-slash-to-dir( $dir0 );
+    unless ( $d0.IO.d ) {
+      die "Can't find directory {$d0}";
+    }
+    $d0-full = append-slash-to-dir( $d0.IO.resolve(:completely).Str );
+  }
 
   my $d = append-slash-to-dir( $dir );
   unless ( $d.IO.d ) {
@@ -100,6 +115,12 @@ sub MAIN(
         # Calculate the whole list of <dir0> checksums and full paths on first
         # invocation.
         my Bool $files-deleted = False;
+        if ( %dir0-list ) {
+          for %dir0-list.kv -> $k, $v {
+            push %dir0-checksums{ $v }, $k;
+            %dir0-full-paths{ $k } = $v;
+          }
+        }
         if ( ! %dir0-checksums ) {
           process-sub-dir( $d0, '', sub ( $aa, $bb ) {
             CATCH {
@@ -141,14 +162,14 @@ sub MAIN(
         # checksums, use different defaults for both calculations to prevent
         # removals if get-file-checksum() returns empty value.
         my Bool $files-deleted = False;
-        if ( $a.IO.f && $a.IO.s == $b.IO.s ) {
+        if ( %dir0-list{ $a }:exists || ( $a.IO.f && $a.IO.s == $b.IO.s ) ) {
           CATCH {
             when is-io-exception( .Str ) {
               say "IO fault while comparing {$a}";
             }
           }
           my $cs = get-file-checksum( $b ) || '--';
-          my $cs_0 = get-file-checksum( $a ) || '---';
+          my $cs_0 = %dir0-list{ $a } || get-file-checksum( $a ) || '---';
           if ( $cs_0 eq $cs ) {
             if ( delete-file( $b ) ) {
               say "{$b} -> remove" if $_verbose;
@@ -243,7 +264,7 @@ sub delete-file ( Str $fnf, Str $checksum? ) {
   # is mainly to prevent deleting a directory outside of both <dir0> and <dir>
   # which is symlinked from both. But also can prevent deleting file from
   # <dir> that is symlinked from <dir0>.
-  unless ( %dir0-full-paths ) {
+  unless ( %dir0-full-paths || %dir0-list ) {
     process-sub-dir( $d0, '', sub ( $aa, $bb ) {
       %dir0-full-paths{ $bb.IO.resolve(:completely).Str } = $bb;
       return False;
@@ -326,6 +347,9 @@ sub dir-symlink-checks( Str $fnf ) {
 }
 
 sub is-dir-under-dir0 ( Str $dir, Str $dir0? ) {
+  if ( %dir0-list ) {
+    return False;
+  }
   my $d0-full-local = $d0-full;
   if ( $dir0 ) {
     $d0-full-local = append-slash-to-dir( $dir0.IO.resolve(:completely).Str );
@@ -334,6 +358,18 @@ sub is-dir-under-dir0 ( Str $dir, Str $dir0? ) {
     return True;
   }
   return False;
+}
+
+sub read-find-checksum-file ( Str $file ) returns Hash {
+  my %res = Empty;
+
+  for $file.IO.lines -> $l {
+    if ( my $m = $l ~~ m/ ^ ( \w ** 32 ) \s+ (\S+) / ) {
+      %res{ $m[1].Str } = $m[ 0 ].Str;
+    }
+  }
+
+  return %res;
 }
 
 sub append-slash-to-dir ( Str $dir ) returns Str {
