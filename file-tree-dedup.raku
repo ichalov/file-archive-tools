@@ -162,7 +162,11 @@ sub MAIN(
         # checksums, use different defaults for both calculations to prevent
         # removals if get-file-checksum() returns empty value.
         my Bool $files-deleted = False;
-        if ( %dir0-list{ $a }:exists || ( $a.IO.f && $a.IO.s == $b.IO.s ) ) {
+        if (
+            %dir0-list && ( %dir0-list{ $a }:exists )
+            ||
+            ! %dir0-list && ( $a.IO.f && $a.IO.s == $b.IO.s )
+        ) {
           CATCH {
             when is-io-exception( .Str ) {
               say "IO fault while comparing {$a}";
@@ -364,7 +368,7 @@ sub read-find-checksum-file ( Str $file ) returns Hash {
   my %res = Empty;
 
   for $file.IO.lines -> $l {
-    if ( my $m = $l ~~ m/ ^ ( \w ** 32 ) \s+ (\S+) / ) {
+    if ( my $m = $l ~~ m/ ^ ( \w ** 32 ) \s+ (.+) $ / ) {
       %res{ $m[1].Str } = $m[ 0 ].Str;
     }
   }
