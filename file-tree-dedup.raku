@@ -313,9 +313,10 @@ sub delete-dir-if-empty( Str $_dir ) {
   my Bool $deletion-performed = False;
   # Only delete current dir if it turns out to be empty after the removals
   # in $proc calls in process-sub-dir() .
-  # Only do that if $dir doesn't contain $d0 to prevent deleting empty
-  # directories from <dir0> in --any-place $proc initialization run.
-  if ( $dir !~~ m:i/ ^ $d0 / ) {
+  # Only do that if $dir doesn't contain $d0 or source list:<dir0> param is in
+  # use (to prevent deleting empty directories from <dir0> in --any-place $proc
+  # initialization run).
+  if ( %dir0-list || $dir !~~ m:i/ ^ $d0 / ) {
     if ( $dir.IO.l ) {
       # Remove symlinks to empty directories if they don't contain files and
       # --process-dir-symlinks is specified.
