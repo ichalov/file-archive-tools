@@ -115,7 +115,7 @@ sub MAIN(
         # Calculate the whole list of <dir0> checksums and full paths on first
         # invocation.
         my Bool $files-deleted = False;
-        if ( %dir0-list ) {
+        if ( ! %dir0-checksums && %dir0-list ) {
           for %dir0-list.kv -> $k, $v {
             push %dir0-checksums{ $v }, $k;
             %dir0-full-paths{ $k } = $v;
